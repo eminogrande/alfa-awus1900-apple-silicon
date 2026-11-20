@@ -133,7 +133,7 @@ sudo modprobe 8814au 2>/dev/null || true'
 }
 
 driver() {
-  ssh_q 'sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq build-essential dkms git iw rfkill nano wpasupplicant isc-dhcp-client linux-modules-extra-$(uname -r)'
+  ssh_q 'sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq build-essential dkms git iw rfkill nano wpasupplicant isc-dhcp-client iputils-ping linux-modules-extra-$(uname -r)'
   if ssh_q 'dkms status 2>/dev/null | grep -q "rtl8814au.*installed"'; then
     echo "driver already installed"
   else

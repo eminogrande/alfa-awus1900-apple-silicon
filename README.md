@@ -64,7 +64,8 @@ launchctl load ~/Library/LaunchAgents/com.alfa.watch.plist
 
 Every 3 s it: keeps the VM up, re-attaches USB 3.0, re-joins Wi-Fi, and flips the macOS
 SOCKS proxy on when the Alfa link is up — off (MacBook Wi-Fi direct) the moment the dongle
-is unplugged or the link drops. Logs: `/tmp/alfa-watch.log`.
+is unplugged, the link drops, **packet loss exceeds 33% or RTT exceeds 600 ms** (active
+quality probing via the Alfa interface). Logs: `/tmp/alfa-watch.log`.
 
 ## Performance optimizations (applied by `install.sh` / `tune`)
 

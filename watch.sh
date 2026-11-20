@@ -31,7 +31,11 @@ while true; do
       LASTJOIN=$now
       conn=$(./alfa.sh ssh 'IF=$(iw dev 2>/dev/null | awk "/Interface/{print \$2; exit}"); iw dev $IF link 2>/dev/null | grep -c "Connected to"' 2>/dev/null || echo 0)
     fi
-    if [ "$conn" = "1" ]; then
+    ql=""
+    [ "$conn" = "1" ] && ql=$(./alfa.sh ssh 'IF=$(iw dev 2>/dev/null | awk "/Interface/{print \$2; exit}"); ping -I "$IF" -c 3 -W 2 -q 1.1.1.1 2>/dev/null | awk -F"/" "/rtt|packets/{print}"' 2>/dev/null | tr "\n" " ")
+    loss=$(echo "$ql" | grep -oE "[0-9]+% packet loss" | grep -oE "^[0-9]+" || echo 100)
+    rtt=$(echo "$ql" | awk -F"= " "/rtt/{print int(\$2)}")
+    if [ "$conn" = "1" ] && [ "${loss:-100}" -le 33 ] && [ -n "${rtt:-}" ] && [ "$rtt" -lt 600 ]; then
       nc -z 127.0.0.1 1080 2>/dev/null || ./alfa.sh proxy on >/dev/null 2>&1
       if [ "$(cat $STATE 2>/dev/null)" != "on" ]; then
         echo on > "$STATE" && echo "$(date '+%H:%M:%S') alfa on"
