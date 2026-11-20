@@ -1,0 +1,11 @@
+*.qcow2
+*.iso
+vars.fd
+id_ed25519*
+qemu.out
+console.log
+monitor.sock
+qemu.pid
+*.log
+.wpa.conf
+.seed/
