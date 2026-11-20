@@ -21,6 +21,7 @@ Then:
 ./alfa.sh wifi                 # scan networks sorted by signal (dBm)
 ./alfa.sh wifi "SSID" "PASS"   # join Wi-Fi & route VM traffic over the antenna
 ./alfa.sh proxy on             # route Mac browsers/apps over the Alfa (SOCKS5 127.0.0.1:1080)
+./alfa.sh watch (LaunchAgent)   # AUTO: Alfa when available, MacBook Wi-Fi fallback
 ./alfa.sh bench                # benchmark MacBook Wi-Fi vs Alfa head-to-head
 ./alfa.sh proxy off            # restore direct MacBook Wi-Fi
 ./alfa.sh monitor              # switch antenna to monitor mode
@@ -44,6 +45,26 @@ Then:
 | `./alfa.sh bench` | side-by-side MacBook `en0` vs Alfa RF, latency, and Cloudflare speed benchmark |
 | `./alfa.sh monitor` / `managed` | single-interface mode switch |
 | `./alfa.sh reset` | hard reset VM |
+
+## Measured (real AP, same channel, Cloudflare speed test)
+
+| path | down | up |
+|---|---|---|
+| MacBook Wi-Fi (en0, 802.11ax, -64 dBm) | 150 Mbps | 23 Mbps |
+| **Mac via Alfa (proxy, -53 dBm)** | **207 Mbps** | **84 Mbps** |
+
+## Auto-fallback (`watch.sh`)
+
+`wifi.env` (gitignored) holds `SSID="..."/PASS="..."`. Load the LaunchAgent:
+
+```bash
+cp com.alfa.watch.plist.template ~/Library/LaunchAgents/com.alfa.watch.plist  # edit path first
+launchctl load ~/Library/LaunchAgents/com.alfa.watch.plist
+```
+
+Every 3 s it: keeps the VM up, re-attaches USB 3.0, re-joins Wi-Fi, and flips the macOS
+SOCKS proxy on when the Alfa link is up — off (MacBook Wi-Fi direct) the moment the dongle
+is unplugged or the link drops. Logs: `/tmp/alfa-watch.log`.
 
 ## Performance optimizations (applied by `install.sh` / `tune`)
 

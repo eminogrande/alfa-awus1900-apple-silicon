@@ -10,3 +10,4 @@ proxy.pid
 *.log
 .wpa.conf
 .seed/
+wifi.env
