@@ -31,9 +31,10 @@ fi
 cat <<'EOF'
 
 Done.
-  ./alfa.sh ssh          shell in the VM
-  ./alfa.sh wifi         list networks   (join: ./alfa.sh wifi "SSID" "PASSWORD")
-  ./alfa.sh monitor      put the antenna in monitor mode
-  ./alfa.sh managed      back to normal mode
-  ./alfa.sh stop         shut the VM down
+  ./alfa.sh wifi         scan networks (sorted by dBm)
+  ./alfa.sh wifi "SSID" "PASS"   join Wi-Fi (prefers 5 GHz)
+  ./alfa.sh proxy on     route Mac traffic via Alfa (SOCKS5)
+  ./alfa.sh bench        benchmark MacBook Wi-Fi vs Alfa
+  ./alfa.sh monitor      monitor mode  |  ./alfa.sh managed
+  ./alfa.sh stop         shut down VM (resets Mac proxy)
 EOF

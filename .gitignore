@@ -6,6 +6,7 @@ qemu.out
 console.log
 monitor.sock
 qemu.pid
+proxy.pid
 *.log
 .wpa.conf
 .seed/
