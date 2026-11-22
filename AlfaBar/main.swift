@@ -66,7 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   func menuNeedsUpdate(_ m: NSMenu) {
     m.removeAllItems()
-    let out = shell("\(VM)/alfa.sh wifi 2>/dev/null | awk '{print $NF}' | sort -u | grep -v 'dBm\|SSID\|^$' | head -12")
+    let out = shell(VM + #"/alfa.sh wifi 2>/dev/null | awk '{print $NF}' | sort -u | grep -v 'dBm\|SSID\|^$' | head -12"#)
     guard !out.isEmpty else { let i = m.addItem(withTitle: "(no networks — antenna attached?)", action: nil, keyEquivalent: ""); i.isEnabled = false; return }
     for ssid in out.split(separator: "\n") {
       let it = m.addItem(withTitle: String(ssid), action: #selector(join(_:)), keyEquivalent: "")
