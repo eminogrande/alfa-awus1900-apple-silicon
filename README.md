@@ -25,6 +25,7 @@ Then:
 ./alfa.sh bench                # benchmark MacBook Wi-Fi vs Alfa head-to-head
 ./alfa.sh proxy off            # restore direct MacBook Wi-Fi
 ./alfa.sh monitor              # switch antenna to monitor mode
+./build-alfabar.sh            # build+install AlfaBar menu bar app (📡 status, force, rescan)
 ./alfa.sh managed              # switch back to managed mode
 ./alfa.sh stop                 # shut down VM (auto-disables proxy)
 ```
@@ -45,6 +46,12 @@ Then:
 | `./alfa.sh bench` | side-by-side MacBook `en0` vs Alfa RF, latency, and Cloudflare speed benchmark |
 | `./alfa.sh monitor` / `managed` | single-interface mode switch |
 | `./alfa.sh reset` | hard reset VM |
+
+## AlfaBar (menu bar app)
+
+`./build-alfabar.sh` builds and installs **AlfaBar.app** (needs Xcode Command Line Tools):
+📡 = traffic via Alfa, ◎ = MacBook Wi-Fi. Menu shows dongle/watch state + exit IP;
+force Alfa/MacBook, rescan, VM shell, repo link. Starts at login (LaunchAgent `com.alfabar`).
 
 ## Measured (real AP, same channel, Cloudflare speed test)
 
