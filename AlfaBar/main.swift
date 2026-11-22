@@ -52,6 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     item.menu = menu
     refresh()
     timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in self.refresh() }
+    scanWifi()
+    Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in self.scanWifi() }
   }
 
   func refresh() {
@@ -64,13 +66,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     ipLine.title = "IP: \(ip)"
   }
 
+  var ssids: [String] = []
+  func scanWifi() {
+    DispatchQueue.global().async {
+      let out = shell(VM + #" 2>/dev/null ./alfa.sh wifi | awk '{$1=$2=$3=""; sub(/^ +/,""); print}' | grep -v 'dBm\|SSID\|^$' | awk 'NF' | sort -u | head -12"#)
+      let list = out.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+      DispatchQueue.main.async { self.ssids = list }
+    }
+  }
   func menuNeedsUpdate(_ m: NSMenu) {
     m.removeAllItems()
-    let out = shell(VM + #"/alfa.sh wifi 2>/dev/null | awk '{print $NF}' | sort -u | grep -v 'dBm\|SSID\|^$' | head -12"#)
-    guard !out.isEmpty else { let i = m.addItem(withTitle: "(no networks — antenna attached?)", action: nil, keyEquivalent: ""); i.isEnabled = false; return }
-    for ssid in out.split(separator: "\n") {
-      let it = m.addItem(withTitle: String(ssid), action: #selector(join(_:)), keyEquivalent: "")
-      it.target = self; it.representedObject = String(ssid)
+    guard !ssids.isEmpty else { let i = m.addItem(withTitle: "(scanning… give it 30 s)", action: nil, keyEquivalent: ""); i.isEnabled = false; return }
+    for ssid in ssids {
+      let it = m.addItem(withTitle: ssid, action: #selector(join(_:)), keyEquivalent: "")
+      it.target = self; it.representedObject = ssid
     }
   }
   @objc func join(_ sender: NSMenuItem) {
