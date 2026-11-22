@@ -84,7 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
   @objc func join(_ sender: NSMenuItem) {
     guard let ssid = sender.representedObject as? String else { return }
-    let saved = shell(". \(VM)/wifi.env 2>/dev/null; SSID=\"\(ssid)\" && [ \"$SSID\" = \"\(ssid)\" ] && echo \"$PASS\"")
+    let saved = shell(". \(VM)/wifi.env 2>/dev/null; [ \"${SSID:-}\" = \"\(ssid)\" ] && echo \"${PASS:-}\"")
     var pass = saved
     if pass.isEmpty {
       let a = NSAlert(); a.messageText = "Wi-Fi password for \"\(ssid)\""; a.addButton(withTitle: "Join"); a.addButton(withTitle: "Cancel")
@@ -92,8 +92,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       if a.runModal() == .alertFirstButtonReturn { pass = f.stringValue } else { return }
     }
     DispatchQueue.global().async {
-      _ = shell("\(VM)/alfa.sh wifi \"\(ssid)\" \"\(pass)\" 2>/dev/null")
-      DispatchQueue.main.async { self.refresh() }
+      let r = shell("\(VM)/alfa.sh wifi \"\(ssid)\" \"\(pass)\" 2>/dev/null | grep -c \"Connected to\"")
+      DispatchQueue.main.async {
+        self.refresh()
+        let a = NSAlert(); a.messageText = r == "1" ? "✅ Joined \"\(ssid)\" via Alfa" : "❌ Failed to join \"\(ssid)\" (wrong password?)"
+        a.runModal()
+      }
     }
   }
   @objc func stopVM() { DispatchQueue.global().async { _ = shell("\(VM)/alfa.sh stop") } }
