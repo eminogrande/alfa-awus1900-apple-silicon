@@ -2,6 +2,7 @@
 # Alfa AWUS1900 (RTL8814AU) on Apple Silicon macOS.
 # Headless QEMU (Apple HVF) + USB 3.0 passthrough + tuned DKMS driver + SOCKS5 proxy + benchmark.
 set -euo pipefail
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 cd "$(dirname "$0")"
 
 IMG_URL="https://cloud-images.ubuntu.com/minimal/releases/noble/release/ubuntu-24.04-minimal-cloudimg-arm64.img"
@@ -15,6 +16,9 @@ PID=qemu.pid
 PROXY_PID=proxy.pid
 PROXY_PORT=${ALFA_PROXY_PORT:-1080}
 MON=monitor.sock
+MODE_FILE=/tmp/alfa-mode
+STATE_FILE=/tmp/alfa-watch.state
+LOCK_FILE=/tmp/alfa-op.pid
 FW=/opt/homebrew/share/qemu/edk2-aarch64-code.fd
 VID=0x0bda
 PID_USB=0x8813
@@ -26,9 +30,27 @@ SSH_TARGET="alfa@127.0.0.1"
 
 ssh_q() { ssh "${SSH_ARGS[@]}" "$SSH_TARGET" "$@"; }
 need_qemu() { command -v qemu-system-aarch64 >/dev/null || { echo "qemu missing: brew install qemu"; exit 1; }; }
-mon() { printf '%s\n' "$1" | nc -U "$MON" >/dev/null 2>&1 || true; }
-host_has_dongle() { system_profiler SPUSBHostDataType 2>/dev/null | grep -qi "${PID_USB#0x}"; }
-iface() { ssh_q 'iw dev 2>/dev/null | awk "/Interface/{print \$2; exit}"'; }
+mon() { [ -S "$MON" ] && printf '%s\n' "$1" | nc -U -w 2 "$MON" >/dev/null 2>&1 || true; }
+host_has_dongle() { ioreg -p IOUSB -w0 2>/dev/null | grep -q '802\.11ac NIC'; }
+vm_running() {
+  [ -f "$PID" ] || return 1
+  local p; p=$(cat "$PID" 2>/dev/null || true)
+  [ -n "$p" ] && kill -0 "$p" 2>/dev/null && ps -p "$p" -o comm= 2>/dev/null | grep -q qemu
+}
+proxy_running() {
+  if [ -f "$PROXY_PID" ]; then
+    local p; p=$(cat "$PROXY_PID" 2>/dev/null || true)
+    [ -n "$p" ] && kill -0 "$p" 2>/dev/null && nc -z 127.0.0.1 "$PROXY_PORT" 2>/dev/null && return 0
+  fi
+  nc -z 127.0.0.1 "$PROXY_PORT" 2>/dev/null && pgrep -f "ssh.*127\.0\.0\.1:$PROXY_PORT" >/dev/null 2>&1
+}
+sys_proxy_on() { networksetup -getsocksfirewallproxy Wi-Fi 2>/dev/null | grep -q '^Enabled: Yes'; }
+iface() { ssh_q 'iw dev 2>/dev/null | awk "/Interface/{print \$2; exit}"' 2>/dev/null || true; }
+
+with_lock() {
+  echo "$$" > "$LOCK_FILE"
+  trap 'rm -f "$LOCK_FILE" 2>/dev/null || true' EXIT
+}
 
 get_image() {
   need_qemu
@@ -66,49 +88,86 @@ disk() {
 }
 
 usb_attach() {
+  vm_running || { echo "VM not running - run ./alfa.sh up"; exit 1; }
   host_has_dongle || { echo "dongle not visible to macOS (check cable/hub/port)"; exit 1; }
   mon "device_del alfa"; sleep 1
   mon "device_add $USB,id=alfa"; sleep 3
   # rtw_switch_usb_mode=1 resets the dongle from USB 2.0 (480M) to USB 3.0 (5000M); re-attach once if needed
-  if ! ssh_q 'lsusb -t 2>/dev/null | grep -q "rtl8814au, 5000M"'; then
+  if ! ssh_q 'lsusb -t 2>/dev/null | grep -q "rtl8814au, 5000M"' 2>/dev/null; then
     if host_has_dongle; then
       mon "device_del alfa"; sleep 1
       mon "device_add $USB,id=alfa"; sleep 3
     fi
   fi
-  ssh_q 'sudo modprobe 8814au 2>/dev/null || true; lsusb -t | grep -E "rtl8814au|5000M|480M" | grep -v root_hub || true'
+  ssh_q 'sudo modprobe 8814au 2>/dev/null || true' 2>/dev/null || true
+  for _ in $(seq 8); do
+    [ -n "$(iface)" ] && break
+    sleep 1
+  done
+  ssh_q 'lsusb -t | grep -E "rtl8814au|5000M|480M" | grep -v root_hub || true' 2>/dev/null || true
+}
+
+daemonize() {
+  local pidfile=$1 log=$2; shift 2
+  perl -MPOSIX=setsid -e '
+    my ($pf, $lg) = splice(@ARGV, 0, 2);
+    my $pid = fork(); die "fork: $!" unless defined $pid;
+    if ($pid) { open my $f, ">", $pf or die $!; print $f "$pid\n"; close $f; exit 0; }
+    setsid() or die "setsid: $!";
+    open STDIN, "<", "/dev/null";
+    open STDOUT, ">", $lg;
+    open STDERR, ">&STDOUT";
+    exec @ARGV or die "exec: $!";
+  ' "$pidfile" "$log" "$@"
 }
 
 up() {
   need_qemu; get_image; seed; disk
-  if [ -f "$PID" ] && kill -0 "$(cat "$PID")" 2>/dev/null; then echo "already running"; return; fi
-  rm -f "$MON" console.log
+  if vm_running; then echo "already running"; return 0; fi
+  rm -f "$MON" "$PID" console.log
   local usb_dev=()
   if host_has_dongle; then usb_dev=(-device "$USB,id=alfa"); fi
-  qemu-system-aarch64 -machine virt,accel=hvf -cpu host -smp 4 -m 1024 \
+  # Fork + setsid before exec so QEMU detaches from caller's process group (survives SIGHUP)
+  daemonize "$PID" qemu.out qemu-system-aarch64 -machine virt,accel=hvf -cpu host -smp 4 -m 1024 \
     -drive if=pflash,format=raw,readonly=on,file="$FW" \
     -drive if=pflash,format=raw,file="$VARS" \
     -drive file="$DISK",if=none,id=hd0,format=qcow2 -device virtio-blk-pci,drive=hd0 \
     -drive file="$SEED",if=none,id=seed,format=raw,readonly=on -device virtio-blk-pci,drive=seed \
     -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22 -device virtio-net-pci,netdev=n0 \
     -device qemu-xhci,id=xhci ${usb_dev[@]+"${usb_dev[@]}"} \
-    -display none -serial file:console.log -monitor "unix:$MON,server,nowait" \
-    </dev/null >qemu.out 2>&1 &
-  echo $! > "$PID"
+    -display none -serial file:console.log -monitor "unix:$MON,server,nowait"
   echo -n "booting"
   for _ in $(seq 60); do
+    vm_running || { echo " crashed - see qemu.out"; rm -f "$PID"; exit 1; }
     ssh_q true 2>/dev/null && { echo " ok"; break; }
     echo -n .; sleep 2
   done
   ssh_q true 2>/dev/null || { echo " timeout - see console.log"; exit 1; }
-  if host_has_dongle && ! ssh_q 'lsusb -t 2>/dev/null | grep -q "rtl8814au, 5000M"'; then
+  if host_has_dongle && ! ssh_q 'lsusb -t 2>/dev/null | grep -q "rtl8814au, 5000M"' 2>/dev/null; then
     usb_attach >/dev/null || true
   fi
 }
 
+stop_vm() {
+  echo off > "$MODE_FILE" 2>/dev/null || true
+  proxy_off >/dev/null 2>&1 || true
+  if vm_running; then
+    local p; p=$(cat "$PID")
+    kill "$p" 2>/dev/null || true
+    for _ in $(seq 15); do
+      kill -0 "$p" 2>/dev/null || break
+      sleep 0.2
+    done
+    kill -9 "$p" 2>/dev/null || true
+    rm -f "$PID" "$MON"
+    echo "stopped"
+  else
+    rm -f "$PID" "$MON"
+    echo "not running"
+  fi
+}
+
 tune() {
-  # USB 3.0 (5 Gbps + 4.32W power), zero power-save/log overhead, RX AMPDU+AMSDU, BBR+fq+16MB buffers.
-  # Note: rtw_country_code intentionally omitted — Realtek's internal table disables 5.8 GHz UNII-3 for many regions.
   ssh_q 'sudo tee /etc/modprobe.d/8814au.conf >/dev/null <<EOF
 options 8814au rtw_switch_usb_mode=1 rtw_drv_log_level=0 rtw_led_ctrl=1 rtw_power_mgnt=0 rtw_ips_mode=0 rtw_enusbss=0 rtw_vht_enable=1 rtw_rx_ampdu_amsdu=1
 EOF
@@ -150,31 +209,61 @@ driver() {
 proxy_off() {
   networksetup -setsocksfirewallproxystate Wi-Fi off 2>/dev/null || true
   if [ -f "$PROXY_PID" ]; then
-    kill "$(cat "$PROXY_PID")" 2>/dev/null || true
+    kill "$(cat "$PROXY_PID" 2>/dev/null)" 2>/dev/null || true
     rm -f "$PROXY_PID"
   fi
+  pkill -f "ssh.*-D 127\.0\.0\.1:$PROXY_PORT" 2>/dev/null || true
+  echo off > "$STATE_FILE" 2>/dev/null || true
   echo "proxy off (macOS Wi-Fi direct)"
 }
 
 proxy_on() {
   local set_sys=${1:-1}
-  if [ -f "$PROXY_PID" ] && kill -0 "$(cat "$PROXY_PID")" 2>/dev/null; then
+  vm_running || { echo "VM not running - run ./alfa.sh up"; exit 1; }
+  if proxy_running; then
     echo "socks5 already running on 127.0.0.1:$PROXY_PORT"
   else
-    ssh "${SSH_ARGS[@]}" -N -D "127.0.0.1:$PROXY_PORT" \
+    rm -f "$PROXY_PID"
+    daemonize "$PROXY_PID" /dev/null ssh "${SSH_ARGS[@]}" -N -D "127.0.0.1:$PROXY_PORT" \
       -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
-      "$SSH_TARGET" </dev/null >/dev/null 2>&1 &
-    echo $! > "$PROXY_PID"
-    sleep 1
-    kill -0 "$(cat "$PROXY_PID")" 2>/dev/null || { rm -f "$PROXY_PID"; echo "proxy failed to start"; exit 1; }
+      "$SSH_TARGET"
+    local ok=0
+    for _ in $(seq 15); do
+      nc -z 127.0.0.1 "$PROXY_PORT" 2>/dev/null && { ok=1; break; }
+      kill -0 "$(cat "$PROXY_PID" 2>/dev/null)" 2>/dev/null || break
+      sleep 0.2
+    done
+    if [ "$ok" != 1 ]; then
+      rm -f "$PROXY_PID"
+      echo "proxy failed to start"
+      exit 1
+    fi
     echo "socks5 running on 127.0.0.1:$PROXY_PORT (aes128-gcm)"
   fi
   if [ "$set_sys" = 1 ]; then
     networksetup -setsocksfirewallproxy Wi-Fi 127.0.0.1 "$PROXY_PORT" 2>/dev/null || true
     networksetup -setsocksfirewallproxystate Wi-Fi on 2>/dev/null || true
+    echo on > "$STATE_FILE" 2>/dev/null || true
     echo "macOS system SOCKS proxy -> ON (browsers/apps now route via Alfa)"
   fi
   echo "CLI: ALL_PROXY=socks5h://127.0.0.1:$PROXY_PORT curl -s https://ifconfig.me"
+}
+
+scan_cmd() {
+  local ifc raw
+  ifc=$(iface)
+  [ -n "$ifc" ] || return 0
+  # Try fresh scan; fall back to cached scan dump if wpa_supplicant is busy scanning
+  raw=$(ssh_q "sudo ip link set '$ifc' up 2>/dev/null; out=\$(sudo iw dev '$ifc' scan 2>/dev/null || true); [ -n \"\$out\" ] && printf '%s\n' \"\$out\" || sudo iw dev '$ifc' scan dump 2>/dev/null || true" 2>/dev/null || true)
+  printf '%s\n' "$raw" | awk '
+    /^BSS /{if(s!="" && (!(s in best) || sig+0 > best[s]+0)){best[s]=sig; bf[s]=f} s=""; f=""; sig=-100}
+    /freq:/{f=$2}
+    /signal:/{sig=$2}
+    /SSID:/{s=substr($0,index($0,"SSID:")+6); gsub(/\r/,"",s)}
+    END{
+      if(s!="" && (!(s in best) || sig+0 > best[s]+0)){best[s]=sig; bf[s]=f}
+      for(k in best) printf "%s\t%.0f\t%.0f\n", k, best[k], bf[k]
+    }' | sort -t $'\t' -k2,2rn
 }
 
 wifi_cmd() {
@@ -190,12 +279,16 @@ wifi_cmd() {
     return
   fi
   local ssid=$1 pass=${2:-}
-  local f5="5180 5200 5220 5240 5260 5280 5300 5320 5500 5520 5540 5560 5580 5600 5620 5640 5660 5680 5700 5745 5765 5785 5805 5825"
+  local ssid_esc=${ssid//\\/\\\\}; ssid_esc=${ssid_esc//\"/\\\"}
   local auth='key_mgmt=NONE'
-  [ -n "$pass" ] && auth=$(printf 'psk="%s"' "$pass")
+  if [ -n "$pass" ]; then
+    local pass_esc=${pass//\\/\\\\}; pass_esc=${pass_esc//\"/\\\"}
+    auth=$(printf 'psk="%s"' "$pass_esc")
+  fi
+  local f5="5180 5200 5220 5240 5260 5280 5300 5320 5500 5520 5540 5560 5580 5600 5620 5640 5660 5680 5700 5745 5765 5785 5805 5825"
   # Prefer 5 GHz (802.11ac) via higher priority; fall back to 2.4 GHz if SSID is 2.4-only
   printf 'ctrl_interface=/run/wpa_supplicant\nnetwork={\n\tssid="%s"\n\t%s\n\tfreq_list=%s\n\tpriority=2\n}\nnetwork={\n\tssid="%s"\n\t%s\n\tpriority=1\n}\n' \
-    "$ssid" "$auth" "$f5" "$ssid" "$auth" | ssh_q "sudo mkdir -p /etc/wpa_supplicant && sudo install -m 600 /dev/stdin /etc/wpa_supplicant/alfa.conf &&
+    "$ssid_esc" "$auth" "$f5" "$ssid_esc" "$auth" | ssh_q "sudo mkdir -p /etc/wpa_supplicant && sudo install -m 600 /dev/stdin /etc/wpa_supplicant/alfa.conf &&
     sudo pkill wpa_supplicant 2>/dev/null || true; sudo rm -f /run/wpa_supplicant/$ifc; sleep 1
     sudo ip link set $ifc up && sudo iw dev $ifc set power_save off 2>/dev/null || true
     sudo wpa_supplicant -B -i $ifc -c /etc/wpa_supplicant/alfa.conf >/dev/null
@@ -205,12 +298,70 @@ wifi_cmd() {
     sudo dhclient -1 $ifc
     GW=\$(ip route show | awk -v d=$ifc '\$1==\"default\" && \$0 ~ \"dev \"d {print \$3; exit}')
     if [ -n \"\$GW\" ]; then
+      sudo ip route del default dev $ifc 2>/dev/null || true
       sudo ip route replace default via \"\$GW\" dev $ifc metric 10
       sudo resolvectl dns $ifc 1.1.1.1 8.8.8.8 2>/dev/null || true
       sudo resolvectl domain $ifc '~.' 2>/dev/null || true
     fi
     iw dev $ifc link | grep -E 'Connected|SSID|freq|signal|tx bitrate|rx bitrate'
     ip -br a show $ifc"
+  # Persist last working Wi-Fi credentials for auto-rejoin
+  printf 'SSID=%q\nPASS=%q\n' "$ssid" "$pass" > wifi.env
+  chmod 600 wifi.env
+}
+
+start_all() {
+  with_lock
+  echo auto > "$MODE_FILE"
+  up
+  if host_has_dongle; then
+    [ -n "$(iface)" ] || usb_attach || true
+    local ifc; ifc=$(iface)
+    if [ -n "$ifc" ]; then
+      local conn; conn=$(ssh_q "iw dev $ifc link 2>/dev/null | grep -c 'Connected to'" 2>/dev/null || echo 0)
+      if [ "$conn" != "1" ] && [ -f wifi.env ]; then
+        # shellcheck disable=SC1091
+        . ./wifi.env
+        [ -n "${SSID:-}" ] && wifi_cmd "$SSID" "${PASS:-}" || true
+      fi
+      conn=$(ssh_q "iw dev $ifc link 2>/dev/null | grep -c 'Connected to'" 2>/dev/null || echo 0)
+      [ "$conn" = "1" ] && proxy_on 1 || echo "VM up, Wi-Fi not connected yet"
+    fi
+  else
+    echo "VM up (plug in Alfa dongle to connect)"
+  fi
+}
+
+status_cmd() {
+  local dongle=0 vm=0 prx=0 sysp=0 watch=0 mode=auto
+  local ifc="" ssid="" freq="" sig="" ip4=""
+  host_has_dongle && dongle=1
+  vm_running && vm=1
+  proxy_running && prx=1
+  sys_proxy_on && sysp=1
+  pgrep -f "alfa-vm/watch\.sh" >/dev/null 2>&1 && watch=1
+  [ -f "$MODE_FILE" ] && mode=$(cat "$MODE_FILE" 2>/dev/null || echo auto)
+  if [ "$vm" = 1 ]; then
+    local g
+    g=$(ssh_q '
+      IF=$(iw dev 2>/dev/null | awk "/Interface/{print \$2; exit}")
+      printf "iface=%s\n" "$IF"
+      if [ -n "$IF" ]; then
+        iw dev "$IF" link 2>/dev/null | awk "
+          /SSID:/{print \"ssid=\" substr(\$0, index(\$0,\"SSID:\")+6)}
+          /freq:/{print \"freq=\" \$2}
+          /signal:/{print \"signal=\" \$2}"
+        printf "ip=%s\n" "$(ip -4 -br a show "$IF" 2>/dev/null | awk "{print \$3}")"
+      fi
+    ' 2>/dev/null || true)
+    ifc=$(printf '%s\n' "$g" | awk -F= '$1=="iface"{print $2; exit}')
+    ssid=$(printf '%s\n' "$g" | awk -F= '$1=="ssid"{sub(/^ssid=/,""); print; exit}')
+    freq=$(printf '%s\n' "$g" | awk -F= '$1=="freq"{print $2; exit}')
+    sig=$(printf '%s\n' "$g" | awk -F= '$1=="signal"{print $2; exit}')
+    ip4=$(printf '%s\n' "$g" | awk -F= '$1=="ip"{print $2; exit}')
+  fi
+  printf 'dongle=%s\nvm=%s\niface=%s\nssid=%s\nfreq=%s\nsignal=%s\nip=%s\nproxy=%s\nsys_proxy=%s\nwatch=%s\nmode=%s\n' \
+    "$dongle" "$vm" "$ifc" "$ssid" "$freq" "$sig" "$ip4" "$prx" "$sysp" "$watch" "$mode"
 }
 
 bench() {
@@ -256,7 +407,7 @@ bench() {
     alfa_dn=$(ssh_q "curl --interface $ifc -s -o /dev/null -w '%{speed_download}' 'https://speed.cloudflare.com/__down?bytes=25000000' | awk '{printf \"%.1f Mbps\", \$1*8/1e6}'")
     alfa_up=$(ssh_q "dd if=/dev/zero bs=1M count=5 2>/dev/null | curl --interface $ifc -s -o /dev/null -w '%{speed_upload}' --data-binary @- 'https://speed.cloudflare.com/__up' | awk '{printf \"%.1f Mbps\", \$1*8/1e6}'")
     printf "Alfa direct (VM):  down=%-11s up=%s\n" "$alfa_dn" "$alfa_up"
-    if [ -f "$PROXY_PID" ] && kill -0 "$(cat "$PROXY_PID")" 2>/dev/null; then
+    if proxy_running; then
       local prx_dn prx_up
       prx_dn=$(curl --socks5-hostname "127.0.0.1:$PROXY_PORT" -s -o /dev/null -w '%{speed_download}' 'https://speed.cloudflare.com/__down?bytes=25000000' | awk '{printf "%.1f Mbps", $1*8/1e6}')
       prx_up=$(dd if=/dev/zero bs=1m count=5 2>/dev/null | curl --socks5-hostname "127.0.0.1:$PROXY_PORT" -s -o /dev/null -w '%{speed_upload}' --data-binary @- 'https://speed.cloudflare.com/__up' | awk '{printf "%.1f Mbps", $1*8/1e6}')
@@ -268,26 +419,27 @@ bench() {
 }
 
 case ${1:-up} in
-  up) up ;;
+  up) with_lock; up ;;
+  start) start_all ;;
   image) get_image ;;
-  stop)
-    [ -f "$PROXY_PID" ] && proxy_off || true
-    if [ -f "$PID" ]; then kill "$(cat "$PID")" 2>/dev/null || true; rm -f "$PID"; echo stopped; else echo "not running"; fi ;;
+  stop) with_lock; stop_vm ;;
   reset) mon system_reset; echo "reset sent" ;;
-  ssh) shift; exec ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -o PreferredAuthentications=publickey -c aes128-gcm@openssh.com -p 2222 -i "$KEY" "$SSH_TARGET" "$@" ;;
+  ssh) shift; exec ssh -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -o PreferredAuthentications=publickey -c aes128-gcm@openssh.com -p 2222 -i "$KEY" "$SSH_TARGET" "$@" ;;
   driver) driver ;;
   tune) tune ;;
-  usb-on) usb_attach ;;
+  usb-on) with_lock; usb_attach ;;
   usb-off) mon "device_del alfa"; echo detached ;;
   verify) ssh_q 'sudo modprobe 8814au; lsusb -t | grep rtl8814au; iw dev | grep -E "Interface|type|txpower"; IF=$(iw dev | awk "/Interface/{print \$2;exit}"); sudo ip link set "$IF" up; echo -n "APs seen: "; timeout 30 sudo iw dev "$IF" scan 2>/dev/null | grep -c "^BSS"' ;;
-  wifi) shift; wifi_cmd "$@" ;;
+  scan) scan_cmd ;;
+  wifi) shift; with_lock; wifi_cmd "$@" ;;
+  status) status_cmd ;;
   proxy)
     case ${2:-on} in
-      on) proxy_on 1 ;;
-      cli) proxy_on 0 ;;
-      off) proxy_off ;;
+      on) with_lock; proxy_on 1 ;;
+      cli) with_lock; proxy_on 0 ;;
+      off) with_lock; proxy_off ;;
       status)
-        [ -f "$PROXY_PID" ] && kill -0 "$(cat "$PROXY_PID")" 2>/dev/null && echo "socks5: up (127.0.0.1:$PROXY_PORT)" || echo "socks5: down"
+        proxy_running && echo "socks5: up (127.0.0.1:$PROXY_PORT)" || echo "socks5: down"
         networksetup -getsocksfirewallproxy Wi-Fi 2>/dev/null | head -3 ;;
       *) echo "usage: $0 proxy on|cli|off|status" ;;
     esac ;;
@@ -296,5 +448,5 @@ case ${1:-up} in
     IF=$(iface); ssh_q "sudo ip link set $IF down; sudo iw dev $IF set type monitor; sudo ip link set $IF up; iw dev $IF info | head -5" ;;
   managed)
     IF=$(iface); ssh_q "sudo ip link set $IF down; sudo iw dev $IF set type managed; sudo ip link set $IF up; iw dev $IF info | head -5" ;;
-  *) echo "usage: $0 up|stop|reset|ssh|driver|tune|usb-on|usb-off|verify|wifi [SSID PASS|off]|proxy [on|cli|off|status]|bench|monitor|managed|image" ;;
+  *) echo "usage: $0 start|up|stop|status|reset|ssh|driver|tune|usb-on|usb-off|verify|scan|wifi [SSID PASS|off]|proxy [on|cli|off|status]|bench|monitor|managed|image" ;;
 esac

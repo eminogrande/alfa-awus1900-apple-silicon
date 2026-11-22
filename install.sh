@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # One-click setup: Alfa AWUS1900 (RTL8814AU) on Apple Silicon macOS.
-# Installs QEMU, downloads a small Ubuntu arm64 cloud image, boots a headless VM
-# with USB passthrough, builds the rtl8814au DKMS driver. ~1 GB RAM, no GUI.
+# Installs QEMU, downloads Ubuntu 24.04 minimal arm64, boots headless VM with
+# USB 3.0 passthrough, builds & tunes rtl8814au DKMS driver, installs `alfa` TUI.
 set -euo pipefail
-cd "$(dirname "$0")"
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
+DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$DIR"
 
 [ "$(uname -s)" = Darwin ] || { echo "macOS only"; exit 1; }
-[ "$(uname -m)" = arm64 ] || echo "note: this is tuned for Apple Silicon (arm64)"
+[ "$(uname -m)" = arm64 ] || echo "note: tuned for Apple Silicon (arm64)"
 
 command -v brew >/dev/null || { echo "install Homebrew first: https://brew.sh"; exit 1; }
 if ! command -v qemu-system-aarch64 >/dev/null; then
@@ -14,27 +16,38 @@ if ! command -v qemu-system-aarch64 >/dev/null; then
   brew install qemu
 fi
 
-chmod +x alfa.sh
+chmod +x alfa.sh watch.sh alfa-tui.py
+BIN_DIR="$(brew --prefix)/bin"
+ln -sf "$DIR/alfa-tui.py" "$BIN_DIR/alfa"
+echo "installed global CLI/TUI: $BIN_DIR/alfa"
+
 ./alfa.sh image
 ./alfa.sh up
 echo
 echo "== building the wifi driver inside the VM (few minutes, needs internet) =="
 ./alfa.sh driver
 echo
-if system_profiler SPUSBHostDataType 2>/dev/null | grep -qi "8813"; then
+if ioreg -p IOUSB -w0 2>/dev/null | grep -q '802\.11ac NIC'; then
   ./alfa.sh usb-on
   ./alfa.sh verify || true
 else
-  echo "plug the Alfa dongle in now, then run: ./alfa.sh usb-on && ./alfa.sh verify"
+  echo "plug the Alfa dongle in now, then run: alfa usb-on && alfa verify"
 fi
 
-cat <<'EOF'
+cat <<EOF
 
-Done.
-  ./alfa.sh wifi         scan networks (sorted by dBm)
-  ./alfa.sh wifi "SSID" "PASS"   join Wi-Fi (prefers 5 GHz)
-  ./alfa.sh proxy on     route Mac traffic via Alfa (SOCKS5)
-  ./alfa.sh bench        benchmark MacBook Wi-Fi vs Alfa
-  ./alfa.sh monitor      monitor mode  |  ./alfa.sh managed
-  ./alfa.sh stop         shut down VM (resets Mac proxy)
+Done. Run the interactive TUI from any terminal:
+  alfa
+
+Or use direct CLI commands:
+  alfa start                  boot VM + attach USB + join saved Wi-Fi + proxy on
+  alfa wifi                   scan networks (sorted by dBm)
+  alfa wifi "SSID" "PASS"     join Wi-Fi (prefers 5 GHz, saves to wifi.env)
+  alfa proxy on | off         route Mac browsers/apps via Alfa (or back to MacBook)
+  alfa bench                  benchmark MacBook Wi-Fi vs Alfa
+  alfa stop                   shut down VM & reset Mac proxy
+
+Optional auto-switch LaunchAgent (auto-starts on USB plug-in, falls back on unplug):
+  sed "s|__DIR__|$DIR|g" com.alfa.watch.plist.template > ~/Library/LaunchAgents/com.alfa.watch.plist
+  launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/com.alfa.watch.plist
 EOF

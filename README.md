@@ -1,11 +1,8 @@
 # Alfa AWUS1900 (RTL8814AU) on Apple Silicon macOS
 
-Realtek never shipped an arm64 macOS driver for the RTL8814AU (Alfa AWUS1900 / AWUS036ACH
-family, `0bda:8813`). macOS sees the dongle on USB but creates no network interface.
+Realtek never shipped an arm64 macOS driver for the RTL8814AU (Alfa AWUS1900 / AWUS036ACH family, `0bda:8813`). macOS sees the dongle on USB but creates no network interface.
 
-This runs the dongle inside a **tiny headless Linux VM** (QEMU + Apple `hvf` + USB 3.0
-SuperSpeed passthrough + tuned DKMS driver + `aes128-gcm` SOCKS5 proxy) with a one-line CLI.
-No GUI, no UTM, no desktop, ~1 GB RAM, boots in ~15 s.
+This repo runs the dongle inside a **headless Linux VM** (QEMU + Apple `hvf` + USB 3.0 SuperSpeed passthrough + tuned `morrownr/8814au` DKMS driver + `aes128-gcm` SOCKS5 proxy) controlled by a **zero-dependency terminal TUI (`alfa`)** and an automatic fallback watchdog (`watch.sh`). No GUI VM app, no UTM, ~1 GB RAM, boots in ~8 s.
 
 ## Quick start
 
@@ -15,113 +12,120 @@ cd alfa-awus1900-apple-silicon
 ./install.sh
 ```
 
-Then:
+`install.sh` installs QEMU, downloads Ubuntu 24.04 minimal arm64, builds & tunes the `rtl8814au` DKMS module, and installs the global `alfa` command in `$(brew --prefix)/bin/alfa`.
+
+Then run the interactive TUI from any terminal:
 
 ```bash
-./alfa.sh wifi                 # scan networks sorted by signal (dBm)
-./alfa.sh wifi "SSID" "PASS"   # join Wi-Fi & route VM traffic over the antenna
-./alfa.sh proxy on             # route Mac browsers/apps over the Alfa (SOCKS5 127.0.0.1:1080)
-./alfa.sh watch (LaunchAgent)   # AUTO: Alfa when available, MacBook Wi-Fi fallback
-./alfa.sh bench                # benchmark MacBook Wi-Fi vs Alfa head-to-head
-./alfa.sh proxy off            # restore direct MacBook Wi-Fi
-./alfa.sh monitor              # switch antenna to monitor mode
-./build-alfabar.sh            # build+install AlfaBar menu bar app (📡 status, force, rescan)
-./alfa.sh managed              # switch back to managed mode
-./alfa.sh stop                 # shut down VM (auto-disables proxy)
+alfa
 ```
 
-## Commands
+### TUI controls (`alfa`)
+
+| key | action |
+|---|---|
+| `s` | **Start Alfa** — boot VM, attach USB 3.0, join saved Wi-Fi, enable proxy |
+| `x` | **Stop Alfa** — disable macOS proxy, shut down VM, pause auto-watch |
+| `c` | **Connect Wi-Fi** — live scan picker (↑/↓ + Enter), hidden SSID option, hidden password input, saves to `wifi.env` |
+| `d` | **Disconnect Wi-Fi** — disconnect Alfa and fall back to MacBook Wi-Fi |
+| `a` / `m` | **Use Alfa (Proxy ON)** / **Use MacBook Wi-Fi (Proxy OFF)** |
+| `w` | **Toggle Auto-watch** — start/stop `com.alfa.watch` LaunchAgent |
+| `u` | **Re-attach USB** — hot-plug/re-enumerate dongle at USB 3.0 (`5000M`) |
+| `b` | **Speed test** — 5 MB Cloudflare download, Alfa SOCKS5 vs MacBook direct |
+| `l` | **Watch log** — inspect `/tmp/alfa-watch.log` |
+| `q` | **Quit TUI** — leaves VM, proxy, and watch running in background |
+
+## Direct CLI commands
+
+Any argument passed to `alfa` (or `./alfa.sh`) runs directly without opening the TUI:
 
 | command | what it does |
 |---|---|
-| `./install.sh` | install QEMU, download Ubuntu arm64 minimal image, boot VM, build & tune driver |
-| `./alfa.sh up` / `stop` | boot / power off VM (`127.0.0.1:2222`; `stop` also resets macOS proxy) |
-| `./alfa.sh ssh` | shell into the VM as `alfa` (passwordless sudo) |
-| `./alfa.sh driver` | build `rtl8814au` DKMS module (with Ubuntu 6.8 patch) and apply `tune` |
-| `./alfa.sh tune` | apply USB 3.0, zero power-save, RX aggregation, BBR + `fq` + 16 MB TCP buffers |
-| `./alfa.sh usb-on` / `usb-off` | hot-plug dongle into VM (auto re-attaches at USB 3.0 `5000M`) |
-| `./alfa.sh verify` | verify USB 3.0 speed, interface, txpower, and AP scan count |
-| `./alfa.sh wifi [SSID PASS\|off]` | scan (sorted by dBm), join Wi-Fi (`metric 10` default route + DNS), or disconnect |
-| `./alfa.sh proxy [on\|cli\|off\|status]` | hardware-accelerated SOCKS5 proxy (`2.2 Gbps` loopback ceiling) for Mac host traffic |
-| `./alfa.sh bench` | side-by-side MacBook `en0` vs Alfa RF, latency, and Cloudflare speed benchmark |
-| `./alfa.sh monitor` / `managed` | single-interface mode switch |
-| `./alfa.sh reset` | hard reset VM |
+| `alfa start` | one-shot boot VM + attach USB + join saved `wifi.env` + proxy on |
+| `alfa up` / `stop` | boot / cleanly power off VM (`stop` always resets macOS SOCKS proxy) |
+| `alfa status` | machine-readable live state (`dongle`, `vm`, `iface`, `ssid`, `signal`, `proxy`, `sys_proxy`, `watch`, `mode`) |
+| `alfa scan` | deduplicated tab-separated Wi-Fi scan (`SSID`, `dBm`, `MHz`) with `scan dump` fallback |
+| `alfa wifi [SSID PASS\|off]` | scan, join Wi-Fi (prefers 5 GHz, sets `metric 10` default route + DNS, saves `wifi.env`), or disconnect |
+| `alfa proxy [on\|cli\|off\|status]` | hardware-accelerated `aes128-gcm` SOCKS5 proxy on `127.0.0.1:1080` |
+| `alfa usb-on` / `usb-off` | hot-plug / detach dongle on QEMU `xhci` bus |
+| `alfa bench` | side-by-side MacBook `en0` vs Alfa RF, latency, and Cloudflare speed benchmark |
+| `alfa ssh` | shell into the VM as `alfa` (passwordless sudo) |
+| `alfa driver` / `tune` | rebuild DKMS driver (with Ubuntu 6.8 patch) / reapply USB 3.0 + BBR tuning |
+| `alfa monitor` / `managed` | single-interface mode switch |
+| `alfa reset` | hard reset VM |
 
-## AlfaBar (menu bar app)
+## Measured performance
 
-`./build-alfabar.sh` builds and installs **AlfaBar.app** (needs Xcode Command Line Tools):
-📡 = traffic via Alfa, ◎ = MacBook Wi-Fi. Menu shows dongle/watch state + exit IP;
-force Alfa/MacBook, rescan, VM shell, repo link. Starts at login (LaunchAgent `com.alfabar`).
+- **Strong 5 GHz AP (same channel, Cloudflare 25 MB / 5 MB):**
+  - MacBook `en0` (802.11ax, -64 dBm): `150 Mbps` down / `23 Mbps` up
+  - **Mac via Alfa (`127.0.0.1:1080`, -53 dBm): `207 Mbps` down / `84 Mbps` up**
+- **Weak / distant 5 GHz AP (-72 dBm, Cloudflare 10 MB uninterrupted):**
+  - MacBook `en0`: `4.3 Mbps`
+  - **Mac via Alfa: `9.0 Mbps`** (>2× faster, 0% drops)
 
-## Measured (real AP, same channel, Cloudflare speed test)
+## Auto-fallback watchdog (`watch.sh`)
 
-| path | down | up |
-|---|---|---|
-| MacBook Wi-Fi (en0, 802.11ax, -64 dBm) | 150 Mbps | 23 Mbps |
-| **Mac via Alfa (proxy, -53 dBm)** | **207 Mbps** | **84 Mbps** |
-
-## Auto-fallback (`watch.sh`)
-
-`wifi.env` (gitignored) holds `SSID="..."/PASS="..."`. Load the LaunchAgent:
+Install the LaunchAgent once (replaces `__DIR__` with your repo path):
 
 ```bash
-cp com.alfa.watch.plist.template ~/Library/LaunchAgents/com.alfa.watch.plist  # edit path first
-launchctl load ~/Library/LaunchAgents/com.alfa.watch.plist
+sed "s|__DIR__|$PWD|g" com.alfa.watch.plist.template > ~/Library/LaunchAgents/com.alfa.watch.plist
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.alfa.watch.plist
 ```
 
-Every 3 s it: keeps the VM up, re-attaches USB 3.0, re-joins Wi-Fi, and flips the macOS
-SOCKS proxy on when the Alfa link is up — off (MacBook Wi-Fi direct) the moment the dongle
-is unplugged, the link drops, **packet loss exceeds 33% or RTT exceeds 600 ms** (active
-quality probing via the Alfa interface). Logs: `/tmp/alfa-watch.log`.
+How `watch.sh` behaves:
+- **Plug in dongle:** auto-boots VM, attaches USB 3.0, checks if your saved `wifi.env` SSID is in range, joins it, and turns macOS SOCKS proxy ON.
+- **Active load safety (hysteresis):** only falls back after **3 consecutive 100% packet-loss checks** (or 2 consecutive Wi-Fi disconnects) so normal download bufferbloat never kills active transfers.
+- **Unplug or manual stop:** immediately disables macOS system SOCKS proxy (even after crashes/reboots), detaches the QEMU USB slot to prevent `libusb` log spam, and respects `/tmp/alfa-mode` (`off`) so it never fights manual `alfa stop` / `Use MacBook Wi-Fi`.
+- **Op lock (`/tmp/alfa-op.pid`):** skips loop ticks while an interactive `alfa` command is running.
 
-## Performance optimizations (applied by `install.sh` / `tune`)
+---
 
-- **USB 3.0 SuperSpeed (`rtw_switch_usb_mode=1`):** upgrades the dongle from USB 2.0
-  (`480 Mb/s`, `2.5 W / 500 mA`) to USB 3.0 (`5 Gb/s`, `4.32 W / 864 mA`), giving the 4×4 MIMO
-  amplifiers 73% more power and 10× bus bandwidth. `usb-on` automatically handles the USB
-  re-enumeration so it lands on `xhci` `5000M`.
-- **Zero sleep / log overhead:** `rtw_power_mgnt=0 rtw_ips_mode=0 rtw_enusbss=0 rtw_drv_log_level=0`,
-  `iw set power_save off`, `rtw_vht_enable=1` (optimal managed-mode VHT), `rtw_rx_ampdu_amsdu=1`.
-- **Full 5.8 GHz UNII-3 preserved:** `rtw_country_code` is intentionally left unset because
-  Realtek's internal channel-plan table disables channels 149–165 for several regions.
-- **Linux TCP stack:** `tcp_bbr` + `fq` qdisc + 16 MB `rmem_max`/`wmem_max` + `tcp_fastopen=3` +
-  `tcp_mtu_probing=1` + `tcp_slow_start_after_idle=0`.
-- **2.2 Gbps host↔VM proxy:** `proxy` uses `ssh -D` with `-c aes128-gcm@openssh.com` (Apple
-  Silicon ARMv8 hardware AES-GCM) — measured at `~2,200 Mbps` over QEMU SLIRP loopback, well
-  above RTL8814AU's 1.3 Gbps PHY max.
+## Guide & Lessons Learned (for anyone building this on Apple Silicon)
 
-## Using the antenna instead of MacBook Wi-Fi
+If you're passing a USB Wi-Fi adapter (especially Realtek `8814au` / `8812au`) into QEMU on Apple Silicon macOS, these are the non-obvious traps that make naive setups unreliable — and how this repo fixes each one:
 
-1. **System-wide Mac browsers & apps (easiest):**
-   ```bash
-   ./alfa.sh wifi "SSID" "PASS"
-   ./alfa.sh proxy on
-   ```
-   Enables a local SOCKS5 proxy on `127.0.0.1:1080` and points macOS Wi-Fi SOCKS settings to it.
-   Run `./alfa.sh proxy off` (or `./alfa.sh stop`) to switch back.
-2. **CLI / per-app only (works even with MacBook Wi-Fi turned off):**
-   ```bash
-   ./alfa.sh proxy cli
-   ALL_PROXY=socks5h://127.0.0.1:1080 curl -s https://ifconfig.me
-   ```
-3. **Full L3 non-proxy traffic (UDP/VPN/all packets):** attach the dongle to a Raspberry Pi and
-   NAT its Ethernet/USB-C interface to the MacBook.
+1. **`nohup qemu-system-aarch64 ... &` STILL dies on `SIGHUP`!**
+   QEMU installs its own `SIGHUP` handler that **overwrites** `SIG_IGN` set by `nohup`. When a parent script, Terminal tab, or GUI subprocess exits, macOS sends `SIGHUP` to the process group and QEMU shuts down (`terminating on signal 1`).
+   - *Fix:* fork and call `POSIX::setsid()` **before** `exec`ing QEMU (and SSH proxy), via macOS's built-in `/usr/bin/perl` (`daemonize()` in `alfa.sh`). Avoids both `SIGHUP` and macOS CoreFoundation post-init `fork()` hazards.
+
+2. **LaunchAgents and macOS GUI apps don't have `/opt/homebrew/bin` in `PATH`.**
+   Scripts that work fine in your interactive zsh shell fail silently under `launchd` because `qemu-system-aarch64` lives in `/opt/homebrew/bin`.
+   - *Fix:* export `PATH="/opt/homebrew/bin:/usr/local/bin:..."` at the top of `alfa.sh` and `watch.sh`, and set `EnvironmentVariables.PATH` in `com.alfa.watch.plist`.
+
+3. **Never poll `iw dev <if> scan` in the background while associated on Realtek `8814au`.**
+   Periodic active off-channel scans (e.g. a menu bar app scanning every 30 s) stall or briefly drop the active 5 GHz link (`linkdown`) and kill throughput. Also, when `wpa_supplicant` is scanning, `iw scan` returns `-16 (EBUSY)`.
+   - *Fix:* only scan on demand (when you open the Wi-Fi picker), and fall back to `iw dev <if> scan dump` when `iw scan` returns busy.
+
+4. **Don't kill a SOCKS proxy on a single ping RTT spike.**
+   Under full download saturation, Wi-Fi bufferbloat routinely pushes ICMP RTT past 600 ms or drops 1 of 3 pings. A watchdog that immediately kills the proxy on one slow ping will sever every active download/stream mid-flight.
+   - *Fix:* require 3 consecutive 100%-loss probes before falling back to MacBook Wi-Fi.
+
+5. **Stale macOS SOCKS proxy breaks all Mac internet after crashes/reboots.**
+   If QEMU or SSH dies unexpectedly, macOS keeps `127.0.0.1:1080` enabled on `Wi-Fi` forever.
+   - *Fix:* `alfa stop` always runs `proxy_off` regardless of PID files, kills any orphaned `ssh -D 127.0.0.1:1080`, and `watch.sh` checks live `networksetup -getsocksfirewallproxy Wi-Fi` state (not just a `/tmp` state file that disappears on reboot).
+
+6. **USB 3.0 mode-switching (`rtw_switch_usb_mode=1`) re-enumerates the dongle.**
+   RTL8814AU boots in USB 2.0 (`480M`, 2.5 W). Enabling `rtw_switch_usb_mode=1` resets it onto the USB 3.0 bus (`5000M`, 4.32 W — 73% more power for the 4×4 MIMO amps), which disconnects it from QEMU's `usb-host` handle once.
+   - *Fix:* `usb_attach` automatically re-attaches via QEMU monitor (`device_del` / `device_add`) until `lsusb -t` shows `rtl8814au, 5000M`.
+
+7. **Avoid duplicate default routes and Ubuntu 6.8 DKMS breaks.**
+   - `dhclient` installs a metric-0 default route; delete it before replacing with `metric 10` so `enp0s3` (QEMU NAT, `metric 100`) stays cleanly as fallback.
+   - Ubuntu 24.04's 6.8 kernel backports the 3-arg `cfg80211` `set_monitor_channel`; `alfa driver` patches the kernel-version guard from `6.12.101` to `6.8.0`.
+   - Leave `rtw_country_code` unset — Realtek's internal table disables 5.8 GHz UNII-3 channels (149–165) in several regions.
+
+## Optional: AlfaBar menu bar app
+
+An optional Swift/AppKit menu bar app is also included in `AlfaBar/` (`./build-alfabar.sh`, requires Xcode CLT), though the `alfa` terminal TUI is recommended for reliability and zero background overhead.
 
 ## Troubleshooting
 
 | symptom | fix |
 |---|---|
-| `dongle not visible to macOS` | `system_profiler SPUSBHostDataType \| grep -i 802.11` — use a USB 3.0 data cable / powered hub |
-| Stuck at `480M` instead of `5000M` | run `./alfa.sh tune` or `./alfa.sh usb-on` (needs a USB 3.0 cable + USB 3.0 hub/port) |
+| `dongle not visible to macOS` | `ioreg -p IOUSB -w0 \| grep '802.11ac'` — check USB 3.0 data cable / powered hub |
+| Stuck at `480M` instead of `5000M` | run `alfa tune` or `alfa usb-on` (needs USB 3.0 cable + port) |
 | macOS *Accessories* prompt | System Settings → Privacy & Security → Allow accessories to connect |
-| `dkms build error ... incompatible-pointer-types` | rerun `./alfa.sh driver` (applies the Ubuntu 6.8 `set_monitor_channel` patch) |
-| Guest wedged after mode switch | `./alfa.sh reset`, then use `./alfa.sh monitor` / `managed` (never add a second `mon0`) |
-| Mac browser has no internet after killing QEMU manually | run `./alfa.sh proxy off` |
-
-## Notes / limits
-
-- Tested on Apple Silicon macOS, QEMU 10/11, Ubuntu 24.04 minimal arm64 (kernel 6.8), Alfa AWUS1900
-  (including through a USB-C 3.1 hub).
-- All generated artifacts (`*.qcow2`, `*.iso`, `vars.fd`, `id_ed25519*`, `*.pid`, `*.log`) are gitignored.
+| `dkms build error` after kernel update | run `alfa driver` |
+| Mac browser has no internet after manual kill | run `alfa proxy off` |
+| Full L3 non-proxy traffic (UDP / VPN) | SOCKS5 covers TCP/browsers/CLI; for full L3 NAT, attach the dongle to a Raspberry Pi over USB-C/Ethernet |
 
 MIT licensed.
