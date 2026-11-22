@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     joinItem.submenu!.delegate = self
     menu.addItem(withTitle: "Force Alfa (proxy on)", action: #selector(forceOn), keyEquivalent: "a").target = self
     menu.addItem(withTitle: "Force MacBook Wi-Fi (proxy off)", action: #selector(forceOff), keyEquivalent: "m").target = self
+    menu.addItem(withTitle: "Stop VM (full off)", action: #selector(stopVM), keyEquivalent: "x").target = self
     menu.addItem(withTitle: "Rescan now", action: #selector(rescan), keyEquivalent: "r").target = self
     menu.addItem(withTitle: "Toggle watch", action: #selector(toggleWatch), keyEquivalent: "w").target = self
     menu.addItem(.separator())
@@ -86,6 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       DispatchQueue.main.async { self.refresh() }
     }
   }
+  @objc func stopVM() { DispatchQueue.global().async { _ = shell("\(VM)/alfa.sh stop") } }
   @objc func forceOn() { shell("\(VM)/alfa.sh proxy on") }
   @objc func forceOff() { shell("\(VM)/alfa.sh proxy off") }
   @objc func rescan() {
