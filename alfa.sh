@@ -17,7 +17,7 @@ PROXY_PID=proxy.pid
 PROXY_PORT=${ALFA_PROXY_PORT:-1080}
 MON=monitor.sock
 MODE_FILE=/tmp/alfa-mode
-STATE_FILE=/tmp/alfa-watch.state
+STATE_FILE=/tmp/alfa-autoswitch.state
 LOCK_FILE=/tmp/alfa-op.pid
 FW=/opt/homebrew/share/qemu/edk2-aarch64-code.fd
 VID=0x0bda
@@ -339,7 +339,7 @@ status_cmd() {
   vm_running && vm=1
   proxy_running && prx=1
   sys_proxy_on && sysp=1
-  pgrep -f "alfa-vm/watch\.sh" >/dev/null 2>&1 && watch=1
+  pgrep -f "alfa-autoswitch\.sh" >/dev/null 2>&1 && watch=1
   [ -f "$MODE_FILE" ] && mode=$(cat "$MODE_FILE" 2>/dev/null || echo auto)
   if [ "$vm" = 1 ]; then
     local g

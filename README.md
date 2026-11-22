@@ -2,7 +2,7 @@
 
 Realtek never shipped an arm64 macOS driver for the RTL8814AU (Alfa AWUS1900 / AWUS036ACH family, `0bda:8813`). macOS sees the dongle on USB but creates no network interface.
 
-This repo runs the dongle inside a **headless Linux VM** (QEMU + Apple `hvf` + USB 3.0 SuperSpeed passthrough + tuned `morrownr/8814au` DKMS driver + `aes128-gcm` SOCKS5 proxy) controlled by a **zero-dependency terminal TUI (`alfa`)** and an automatic fallback watchdog (`watch.sh`). No GUI VM app, no UTM, ~1 GB RAM, boots in ~8 s.
+This repo runs the dongle inside a **headless Linux VM** (QEMU + Apple `hvf` + USB 3.0 SuperSpeed passthrough + tuned `morrownr/8814au` DKMS driver + `aes128-gcm` SOCKS5 proxy) controlled by a **zero-dependency terminal TUI (`alfa`)**, an optional **menu bar status app (`AlfaBar`)**, and an automatic fallback daemon (`alfa-autoswitch.sh`). No GUI VM app, no UTM, ~1 GB RAM, boots in ~8 s.
 
 ## Quick start
 
@@ -29,11 +29,11 @@ alfa
 | `c` | **Connect Wi-Fi** — live scan picker (↑/↓ + Enter), hidden SSID option, hidden password input, saves to `wifi.env` |
 | `d` | **Disconnect Wi-Fi** — disconnect Alfa and fall back to MacBook Wi-Fi |
 | `a` / `m` | **Use Alfa (Proxy ON)** / **Use MacBook Wi-Fi (Proxy OFF)** |
-| `w` | **Toggle Auto-watch** — start/stop `com.alfa.watch` LaunchAgent |
+| `w` | **Toggle Auto-switch** — start/stop `com.alfa.autoswitch` LaunchAgent |
 | `u` | **Re-attach USB** — hot-plug/re-enumerate dongle at USB 3.0 (`5000M`) |
 | `b` | **Speed test** — 5 MB Cloudflare download, Alfa SOCKS5 vs MacBook direct |
-| `l` | **Watch log** — inspect `/tmp/alfa-watch.log` |
-| `q` | **Quit TUI** — leaves VM, proxy, and watch running in background |
+| `l` | **Auto-switch log** — inspect `/tmp/alfa-autoswitch.log` |
+| `q` | **Quit TUI** — leaves VM, proxy, and auto-switch running in background |
 
 ## Direct CLI commands
 
@@ -63,16 +63,16 @@ Any argument passed to `alfa` (or `./alfa.sh`) runs directly without opening the
   - MacBook `en0`: `4.3 Mbps`
   - **Mac via Alfa: `9.0 Mbps`** (>2× faster, 0% drops)
 
-## Auto-fallback watchdog (`watch.sh`)
+## Auto-switch daemon (`alfa-autoswitch.sh`)
 
 Install the LaunchAgent once (replaces `__DIR__` with your repo path):
 
 ```bash
-sed "s|__DIR__|$PWD|g" com.alfa.watch.plist.template > ~/Library/LaunchAgents/com.alfa.watch.plist
-launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.alfa.watch.plist
+sed "s|__DIR__|$PWD|g" com.alfa.autoswitch.plist.template > ~/Library/LaunchAgents/com.alfa.autoswitch.plist
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.alfa.autoswitch.plist
 ```
 
-How `watch.sh` behaves:
+How `alfa-autoswitch.sh` behaves:
 - **Plug in dongle:** auto-boots VM, attaches USB 3.0, checks if your saved `wifi.env` SSID is in range, joins it, and turns macOS SOCKS proxy ON.
 - **Active load safety (hysteresis):** only falls back after **3 consecutive 100% packet-loss checks** (or 2 consecutive Wi-Fi disconnects) so normal download bufferbloat never kills active transfers.
 - **Unplug or manual stop:** immediately disables macOS system SOCKS proxy (even after crashes/reboots), detaches the QEMU USB slot to prevent `libusb` log spam, and respects `/tmp/alfa-mode` (`off`) so it never fights manual `alfa stop` / `Use MacBook Wi-Fi`.
@@ -90,7 +90,7 @@ If you're passing a USB Wi-Fi adapter (especially Realtek `8814au` / `8812au`) i
 
 2. **LaunchAgents and macOS GUI apps don't have `/opt/homebrew/bin` in `PATH`.**
    Scripts that work fine in your interactive zsh shell fail silently under `launchd` because `qemu-system-aarch64` lives in `/opt/homebrew/bin`.
-   - *Fix:* export `PATH="/opt/homebrew/bin:/usr/local/bin:..."` at the top of `alfa.sh` and `watch.sh`, and set `EnvironmentVariables.PATH` in `com.alfa.watch.plist`.
+   - *Fix:* export `PATH="/opt/homebrew/bin:/usr/local/bin:..."` at the top of `alfa.sh` and `alfa-autoswitch.sh`, and set `EnvironmentVariables.PATH` in `com.alfa.autoswitch.plist`.
 
 3. **Never poll `iw dev <if> scan` in the background while associated on Realtek `8814au`.**
    Periodic active off-channel scans (e.g. a menu bar app scanning every 30 s) stall or briefly drop the active 5 GHz link (`linkdown`) and kill throughput. Also, when `wpa_supplicant` is scanning, `iw scan` returns `-16 (EBUSY)`.
@@ -102,7 +102,7 @@ If you're passing a USB Wi-Fi adapter (especially Realtek `8814au` / `8812au`) i
 
 5. **Stale macOS SOCKS proxy breaks all Mac internet after crashes/reboots.**
    If QEMU or SSH dies unexpectedly, macOS keeps `127.0.0.1:1080` enabled on `Wi-Fi` forever.
-   - *Fix:* `alfa stop` always runs `proxy_off` regardless of PID files, kills any orphaned `ssh -D 127.0.0.1:1080`, and `watch.sh` checks live `networksetup -getsocksfirewallproxy Wi-Fi` state (not just a `/tmp` state file that disappears on reboot).
+   - *Fix:* `alfa stop` always runs `proxy_off` regardless of PID files, kills any orphaned `ssh -D 127.0.0.1:1080`, and `alfa-autoswitch.sh` checks live `networksetup -getsocksfirewallproxy Wi-Fi` state (not just a `/tmp` state file that disappears on reboot).
 
 6. **USB 3.0 mode-switching (`rtw_switch_usb_mode=1`) re-enumerates the dongle.**
    RTL8814AU boots in USB 2.0 (`480M`, 2.5 W). Enabling `rtw_switch_usb_mode=1` resets it onto the USB 3.0 bus (`5000M`, 4.32 W — 73% more power for the 4×4 MIMO amps), which disconnects it from QEMU's `usb-host` handle once.

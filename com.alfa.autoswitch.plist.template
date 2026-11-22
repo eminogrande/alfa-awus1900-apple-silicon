@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>Label</key><string>com.alfa.watch</string>
+  <key>Label</key><string>com.alfa.autoswitch</string>
   <key>ProgramArguments</key><array>
-    <string>__DIR__/watch.sh</string>
+    <string>__DIR__/alfa-autoswitch.sh</string>
   </array>
   <key>EnvironmentVariables</key><dict>
     <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>/tmp/alfa-watch.log</string>
-  <key>StandardErrorPath</key><string>/tmp/alfa-watch.log</string>
+  <key>StandardOutPath</key><string>/tmp/alfa-autoswitch.log</string>
+  <key>StandardErrorPath</key><string>/tmp/alfa-autoswitch.log</string>
 </dict></plist>

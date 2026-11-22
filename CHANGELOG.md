@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-22 (5) — Rename `watch.sh` → `alfa-autoswitch.sh` + `AlfaBar` TUI shortcut
+- Renamed `watch.sh` → `alfa-autoswitch.sh` and LaunchAgent `com.alfa.watch` → `com.alfa.autoswitch` (log `/tmp/alfa-autoswitch.log`) for clarity.
+- Added **Open TUI (`alfa`)** item to `AlfaBar` and removed remaining auto-scan trigger on status poll so menu bar status + terminal TUI work side by side with zero radio disruption.
+
 ## 2026-11-22 (4) — Reliability overhaul + `alfa` CLI TUI
 - **New `alfa` CLI TUI (`alfa-tui.py`)**: zero-dependency Python `curses` terminal controller installed globally as `alfa` (`[s]` start, `[x]` stop, `[c]` live scan & connect with hidden password prompt, `[d]` disconnect, `[a]`/`[m]` switch Alfa/MacBook, `[w]` toggle auto-watch, `[u]` re-attach USB, `[b]` speed test, `[l]` watch log). Direct CLI passthrough (`alfa status`, `alfa start`, `alfa stop`, etc.).
 - **Fix: QEMU & SSH proxy killed by `SIGHUP`** — QEMU overrides `SIG_IGN` set by `nohup`, causing silent shutdowns when parent shells/subprocesses exit. Added `daemonize()` (`fork()` + `POSIX::setsid()` before `exec`) in `alfa.sh` for both QEMU and SSH SOCKS5.

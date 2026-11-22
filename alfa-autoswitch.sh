@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# alfa watch — auto-switch: Alfa when available, MacBook Wi-Fi as fallback.
+# alfa-autoswitch.sh — auto-switch: Alfa when available, MacBook Wi-Fi as fallback.
 # Uses hysteresis so transient Wi-Fi bufferbloat during downloads never drops active connections.
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 cd "$(dirname "$0")" || exit 1
 
-STATE=/tmp/alfa-watch.state
+STATE=/tmp/alfa-autoswitch.state
 MODE=/tmp/alfa-mode
 LOCK=/tmp/alfa-op.pid
 LASTATT=0

@@ -10,8 +10,8 @@ import time
 VM_DIR = os.environ.get("ALFA_DIR") or os.path.dirname(os.path.realpath(__file__))
 ALFA_SH = os.path.join(VM_DIR, "alfa.sh")
 MODE_FILE = "/tmp/alfa-mode"
-LOG_FILE = "/tmp/alfa-watch.log"
-WATCH_PLIST = os.path.expanduser("~/Library/LaunchAgents/com.alfa.watch.plist")
+LOG_FILE = "/tmp/alfa-autoswitch.log"
+WATCH_PLIST = os.path.expanduser("~/Library/LaunchAgents/com.alfa.autoswitch.plist")
 ENV = {**os.environ, "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"}
 
 
@@ -224,7 +224,7 @@ class AlfaTUI:
         scr.nodelay(False)
         while True:
             scr.erase()
-            safe_add(scr, 1, 2, f"Watch Log ({LOG_FILE})   [r] refresh   [Esc/q] back", curses.A_BOLD)
+            safe_add(scr, 1, 2, f"Auto-switch Log ({LOG_FILE})   [r] refresh   [Esc/q] back", curses.A_BOLD)
             lines = []
             if os.path.exists(LOG_FILE):
                 with open(LOG_FILE, errors="replace") as f:
@@ -283,14 +283,14 @@ class AlfaTUI:
         w_txt = "OFF"
         if st["watch"]:
             w_txt = "PAUSED (manual off)" if st["mode"] == "off" else "ON (auto-fallback)"
-        safe_add(scr, 8, 2, f"Watch  : {w_txt:<22}  Exit IP: {ip}")
+        safe_add(scr, 8, 2, f"Auto   : {w_txt:<22}  Exit IP: {ip}")
 
         safe_add(scr, 10, 2, "─" * 54, curses.A_DIM)
         safe_add(scr, 11, 2, "[s] Start Alfa (VM+USB+Wi-Fi+Proxy)   [x] Stop Alfa")
         safe_add(scr, 12, 2, "[c] Connect Wi-Fi (scan & join)       [d] Disconnect Wi-Fi")
         safe_add(scr, 13, 2, "[a] Use Alfa (Proxy ON)               [m] Use MacBook Wi-Fi")
-        safe_add(scr, 14, 2, "[w] Toggle Auto-watch                 [u] Re-attach USB")
-        safe_add(scr, 15, 2, "[b] Speed test (Alfa vs MacBook)      [l] View Watch Log")
+        safe_add(scr, 14, 2, "[w] Toggle Auto-switch                [u] Re-attach USB")
+        safe_add(scr, 15, 2, "[b] Speed test (Alfa vs MacBook)      [l] Auto-switch Log")
         safe_add(scr, 16, 2, "[r] Refresh                           [q] Quit TUI")
 
         safe_add(scr, 18, 2, "─" * 54, curses.A_DIM)
@@ -360,18 +360,18 @@ class AlfaTUI:
                     if was_on:
                         with open(MODE_FILE, "w") as f:
                             f.write("off\n")
-                        run(["/bin/launchctl", "bootout", f"gui/{uid}/com.alfa.watch"], timeout=5)
-                        run(["/usr/bin/pkill", "-f", "alfa-vm/watch.sh"], timeout=5)
-                        return "Auto-watch stopped."
+                        run(["/bin/launchctl", "bootout", f"gui/{uid}/com.alfa.autoswitch"], timeout=5)
+                        run(["/usr/bin/pkill", "-f", "alfa-autoswitch.sh"], timeout=5)
+                        return "Auto-switch stopped."
                     else:
                         with open(MODE_FILE, "w") as f:
                             f.write("auto\n")
-                        run(["/bin/launchctl", "bootout", f"gui/{uid}/com.alfa.watch"], timeout=5)
+                        run(["/bin/launchctl", "bootout", f"gui/{uid}/com.alfa.autoswitch"], timeout=5)
                         code, _ = run(["/bin/launchctl", "bootstrap", f"gui/{uid}", WATCH_PLIST], timeout=5)
                         if code != 0:
                             run(["/bin/launchctl", "load", "-w", WATCH_PLIST], timeout=5)
-                        return "Auto-watch started."
-                self.start_op("Toggling auto-watch…", do_watch)
+                        return "Auto-switch started."
+                self.start_op("Toggling auto-switch…", do_watch)
             elif ch == ord("u"):
                 self.start_op("Re-attaching USB…", lambda: run_alfa("usb-on", timeout=30)[1] or "USB attached.")
             elif ch == ord("b"):

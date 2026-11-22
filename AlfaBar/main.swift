@@ -10,8 +10,8 @@ let VM: String = {
   return repoDir
 }()
 let MODE_FILE = "/tmp/alfa-mode"
-let LOG_FILE = "/tmp/alfa-watch.log"
-let WATCH_PLIST = NSHomeDirectory() + "/Library/LaunchAgents/com.alfa.watch.plist"
+let LOG_FILE = "/tmp/alfa-autoswitch.log"
+let WATCH_PLIST = NSHomeDirectory() + "/Library/LaunchAgents/com.alfa.autoswitch.plist"
 let ENV_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 struct Status {
@@ -152,13 +152,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     useAlfaItem = addAction("Use Alfa (Proxy ON)", #selector(forceOn), "a")
     useMacItem = addAction("Use MacBook Wi-Fi (Proxy OFF)", #selector(forceOff), "m")
-    watchItem = addAction("Auto-switch (Watch)", #selector(toggleWatch), "w")
+    watchItem = addAction("Auto-switch", #selector(toggleWatch), "w")
     menu.addItem(.separator())
 
     _ = addAction("Open TUI (alfa)", #selector(openTUI), "o")
     _ = addAction("Re-attach USB", #selector(reattachUSB), "u")
     _ = addAction("Open VM Shell", #selector(openShell), "t")
-    _ = addAction("View Watch Log", #selector(viewLog), "l")
+    _ = addAction("View Auto-switch Log", #selector(viewLog), "l")
     menu.addItem(.separator())
     menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
@@ -220,7 +220,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     useMacItem.isEnabled = !busy
     useMacItem.state = !s.routingViaAlfa ? .on : .off
     watchItem.state = (s.watch && s.mode != "off") ? .on : .off
-    watchItem.title = s.watch ? (s.mode == "off" ? "Auto-switch (Paused)" : "Auto-switch (Watch)") : "Auto-switch (Watch: Off)"
+    watchItem.title = s.watch ? (s.mode == "off" ? "Auto-switch (Paused)" : "Auto-switch (On)") : "Auto-switch (Off)"
   }
 
   func pollStatus() {
@@ -452,11 +452,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       let uid = String(getuid())
       if currentlyActive {
         try? "off".write(toFile: MODE_FILE, atomically: true, encoding: .utf8)
-        _ = runExec("/bin/launchctl", ["bootout", "gui/\(uid)/com.alfa.watch"])
-        _ = runExec("/usr/bin/pkill", ["-f", "alfa-vm/watch.sh"])
+        _ = runExec("/bin/launchctl", ["bootout", "gui/\(uid)/com.alfa.autoswitch"])
+        _ = runExec("/usr/bin/pkill", ["-f", "alfa-autoswitch.sh"])
       } else {
         try? "auto".write(toFile: MODE_FILE, atomically: true, encoding: .utf8)
-        _ = runExec("/bin/launchctl", ["bootout", "gui/\(uid)/com.alfa.watch"])
+        _ = runExec("/bin/launchctl", ["bootout", "gui/\(uid)/com.alfa.autoswitch"])
         let (code, _) = runExec("/bin/launchctl", ["bootstrap", "gui/\(uid)", WATCH_PLIST])
         if code != 0 {
           _ = runExec("/bin/launchctl", ["load", "-w", WATCH_PLIST])

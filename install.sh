@@ -16,7 +16,7 @@ if ! command -v qemu-system-aarch64 >/dev/null; then
   brew install qemu
 fi
 
-chmod +x alfa.sh watch.sh alfa-tui.py
+chmod +x alfa.sh alfa-autoswitch.sh alfa-tui.py
 BIN_DIR="$(brew --prefix)/bin"
 ln -sf "$DIR/alfa-tui.py" "$BIN_DIR/alfa"
 echo "installed global CLI/TUI: $BIN_DIR/alfa"
@@ -48,6 +48,6 @@ Or use direct CLI commands:
   alfa stop                   shut down VM & reset Mac proxy
 
 Optional auto-switch LaunchAgent (auto-starts on USB plug-in, falls back on unplug):
-  sed "s|__DIR__|$DIR|g" com.alfa.watch.plist.template > ~/Library/LaunchAgents/com.alfa.watch.plist
-  launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/com.alfa.watch.plist
+  sed "s|__DIR__|$DIR|g" com.alfa.autoswitch.plist.template > ~/Library/LaunchAgents/com.alfa.autoswitch.plist
+  launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/com.alfa.autoswitch.plist
 EOF
