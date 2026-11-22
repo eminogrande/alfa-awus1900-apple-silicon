@@ -69,7 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   var ssids: [String] = []
   func scanWifi() {
     DispatchQueue.global().async {
-      let out = shell(VM + #" 2>/dev/null ./alfa.sh wifi | awk '{$1=$2=$3=""; sub(/^ +/,""); print}' | grep -v 'dBm\|SSID\|^$' | awk 'NF' | sort -u | head -12"#)
+      let out = shell(VM + #"/alfa.sh wifi 2>/dev/null | awk '{$1=$2=$3=""; sub(/^ +/,""); print}' | grep -v 'dBm\|SSID\|^$' | awk 'NF' | sort -u | head -12"#)
       let list = out.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
       DispatchQueue.main.async { self.ssids = list }
     }
