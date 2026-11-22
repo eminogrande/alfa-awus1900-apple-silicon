@@ -13,3 +13,8 @@
 ## 2026-11-22 (2)
 - **Fix: VM failed to boot after Mac reboot** — bash 3.2 treats empty array expansion as unbound; guard `${usb_dev[@]+...}` added.
 - **AlfaBar: "Join network…"** — live scan submenu, click SSID to join (saved password from `wifi.env`, else prompt). Switch networks entirely from the menu bar.
+
+## 2026-11-22 (3)
+- **AlfaBar**: background scan cache (32 s scan froze the menu), spaced-SSID parsing, per-SSID password (was reusing wifi.env for any network), ✅/❌ join alert, Stop VM item.
+- **Fix**: DKMS rebuild for kernel 6.8.0-149 (Ubuntu auto-update orphaned the module) — `driver` now rebuilds for any new kernel via dkms add/build/install.
+- Known open: none blocking. To hand over: Njamakuya password join untested (needs real password), mqvpn bonding (Speedify-style) not started.
