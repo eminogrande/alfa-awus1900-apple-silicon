@@ -91,7 +91,7 @@ up() {
     -drive file="$DISK",if=none,id=hd0,format=qcow2 -device virtio-blk-pci,drive=hd0 \
     -drive file="$SEED",if=none,id=seed,format=raw,readonly=on -device virtio-blk-pci,drive=seed \
     -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22 -device virtio-net-pci,netdev=n0 \
-    -device qemu-xhci,id=xhci "${usb_dev[@]}" \
+    -device qemu-xhci,id=xhci ${usb_dev[@]+"${usb_dev[@]}"} \
     -display none -serial file:console.log -monitor "unix:$MON,server,nowait" \
     </dev/null >qemu.out 2>&1 &
   echo $! > "$PID"

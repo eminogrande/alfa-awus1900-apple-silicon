@@ -17,13 +17,14 @@ func shell(_ cmd: String) -> String {
   return String(data: o.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   var item: NSStatusItem!
   var menu: NSMenu!
   var stateLine: NSMenuItem!
   var detail: NSMenuItem!
   var ipLine: NSMenuItem!
   var timer: Timer!
+  var joinItem: NSMenuItem!
 
   func applicationDidFinishLaunching(_ n: Notification) {
     item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -35,6 +36,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ipLine = menu.addItem(withTitle: "", action: nil, keyEquivalent: "")
     ipLine.isEnabled = false
     menu.addItem(.separator())
+    joinItem = menu.addItem(withTitle: "Join network…", action: nil, keyEquivalent: "")
+    joinItem.submenu = NSMenu()
+    joinItem.submenu!.delegate = self
     menu.addItem(withTitle: "Force Alfa (proxy on)", action: #selector(forceOn), keyEquivalent: "a").target = self
     menu.addItem(withTitle: "Force MacBook Wi-Fi (proxy off)", action: #selector(forceOff), keyEquivalent: "m").target = self
     menu.addItem(withTitle: "Rescan now", action: #selector(rescan), keyEquivalent: "r").target = self
@@ -59,6 +63,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ipLine.title = "IP: \(ip)"
   }
 
+  func menuNeedsUpdate(_ m: NSMenu) {
+    m.removeAllItems()
+    let out = shell("\(VM)/alfa.sh wifi 2>/dev/null | awk '{print $NF}' | sort -u | grep -v 'dBm\|SSID\|^$' | head -12")
+    guard !out.isEmpty else { let i = m.addItem(withTitle: "(no networks — antenna attached?)", action: nil, keyEquivalent: ""); i.isEnabled = false; return }
+    for ssid in out.split(separator: "\n") {
+      let it = m.addItem(withTitle: String(ssid), action: #selector(join(_:)), keyEquivalent: "")
+      it.target = self; it.representedObject = String(ssid)
+    }
+  }
+  @objc func join(_ sender: NSMenuItem) {
+    guard let ssid = sender.representedObject as? String else { return }
+    let saved = shell(". \(VM)/wifi.env 2>/dev/null; SSID=\"\(ssid)\" && [ \"$SSID\" = \"\(ssid)\" ] && echo \"$PASS\"")
+    var pass = saved
+    if pass.isEmpty {
+      let a = NSAlert(); a.messageText = "Wi-Fi password for \"\(ssid)\""; a.addButton(withTitle: "Join"); a.addButton(withTitle: "Cancel")
+      let f = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24)); a.accessoryView = f; a.window.initialFirstResponder = f
+      if a.runModal() == .alertFirstButtonReturn { pass = f.stringValue } else { return }
+    }
+    DispatchQueue.global().async {
+      _ = shell("\(VM)/alfa.sh wifi \"\(ssid)\" \"\(pass)\" 2>/dev/null")
+      DispatchQueue.main.async { self.refresh() }
+    }
+  }
   @objc func forceOn() { shell("\(VM)/alfa.sh proxy on") }
   @objc func forceOff() { shell("\(VM)/alfa.sh proxy off") }
   @objc func rescan() {
