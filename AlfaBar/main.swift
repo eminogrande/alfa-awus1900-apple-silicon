@@ -155,6 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     watchItem = addAction("Auto-switch (Watch)", #selector(toggleWatch), "w")
     menu.addItem(.separator())
 
+    _ = addAction("Open TUI (alfa)", #selector(openTUI), "o")
     _ = addAction("Re-attach USB", #selector(reattachUSB), "u")
     _ = addAction("Open VM Shell", #selector(openShell), "t")
     _ = addAction("View Watch Log", #selector(viewLog), "l")
@@ -236,9 +237,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         self.renderUI()
         if routeChanged || Date().timeIntervalSince(self.lastIPFetch) > 15 {
           self.fetchExitIP(viaAlfa: parsed.routingViaAlfa)
-        }
-        if parsed.vm && !parsed.iface.isEmpty && self.networks.isEmpty {
-          self.scanWifi(force: false)
         }
       }
     }
@@ -477,6 +475,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   @objc func rescanNow() {
     scanWifi(force: true)
+  }
+
+  @objc func openTUI() {
+    opQ.async {
+      _ = runExec("/usr/bin/osascript", [
+        "-e", "tell application \"Terminal\" to activate",
+        "-e", "tell application \"Terminal\" to do script \"alfa\""
+      ])
+    }
   }
 
   @objc func openShell() {
