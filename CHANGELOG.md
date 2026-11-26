@@ -6,6 +6,7 @@
   - Direct auto-rejoin of saved `wifi.env` (removed fragile `iw scan` gate that failed on `-16 EBUSY`), plus automatic USB re-attach after 2 failed joins (self-heals after Mac sleep).
   - Clean Open Speedify coordination (`127.0.0.1:19454`): yields macOS system SOCKS5 proxy while Open Speedify is actively combining Alfa with other links (keeping VM & Wi-Fi healthy, never modifying `/tmp/alfa-mode`), and immediately restores Alfa as default when Open Speedify turns OFF.
 - **Fix: stacked `dhclient` daemons in VM (`alfa.sh`)**: Kills stale `dhclient` processes cleanly with `pkill -x dhclient` / `pkill -x wpa_supplicant` before DHCP lease acquisition and verifies IPv4 presence on `start`/`wifi`.
+- **Reduced VM footprint (`alfa.sh`)**: Lowered QEMU allocation from `4 vCPU / 1024 MB` to `2 vCPU / 512 MB` (saves ~1 GB host RAM on 16 GB Macs with no throughput impact).
 - **Ultra-simplified emoji `AlfaBar` (`AlfaBar/main.swift`)**: Compact `⚪ 📡` / `🟡 📡` / `🟢 📡` menu bar with a single `🟢 Turn Alfa ON` / `🔴 Turn Alfa OFF` toggle (`⌘S`), `📶 Wi-Fi Network… ▸` picker, and collapsed `🔧 Tools ▸` submenu. Shows `🟢 Alfa ON · Default Internet` or `🟢 Alfa ON · Combined in Open Speedify`.
 
 ## 2026-11-22 (5) — Rename `watch.sh` → `alfa-autoswitch.sh` + `AlfaBar` TUI shortcut

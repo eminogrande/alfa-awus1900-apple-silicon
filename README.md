@@ -2,7 +2,7 @@
 
 Realtek never shipped an arm64 macOS driver for the RTL8814AU (Alfa AWUS1900 / AWUS036ACH family, `0bda:8813`). macOS sees the dongle on USB but creates no network interface.
 
-This repo runs the dongle inside a **headless Linux VM** (QEMU + Apple `hvf` + USB 3.0 SuperSpeed passthrough + tuned `morrownr/8814au` DKMS driver + `aes128-gcm` SOCKS5 proxy) controlled by a **zero-dependency terminal TUI (`alfa`)**, an optional **menu bar status app (`AlfaBar`)**, and an automatic fallback daemon (`alfa-autoswitch.sh`). No GUI VM app, no UTM, ~1 GB RAM, boots in ~8 s.
+This repo runs the dongle inside a **headless Linux VM** (QEMU + Apple `hvf` + USB 3.0 SuperSpeed passthrough + tuned `morrownr/8814au` DKMS driver + `aes128-gcm` SOCKS5 proxy) controlled by a **zero-dependency terminal TUI (`alfa`)**, an optional **menu bar status app (`AlfaBar`)**, and an automatic fallback daemon (`alfa-autoswitch.sh`). No GUI VM app, no UTM, ~512 MB RAM, boots in ~8 s.
 
 ## Quick start
 

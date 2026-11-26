@@ -64,6 +64,7 @@ with_lock() {
 
 get_image() {
   need_qemu
+  [ -f "$DISK" ] && return 0
   if [ ! -f "$IMG" ]; then
     echo "downloading Ubuntu 24.04 minimal arm64 cloud image (~215 MB)"
     curl -fL --retry 3 -C - -o "$IMG" "$IMG_URL" || curl -fL --retry 3 -C - -o "$IMG" "$IMG_URL_ALT"
@@ -138,7 +139,7 @@ up() {
   local usb_dev=()
   if host_has_dongle; then usb_dev=(-device "$USB,id=alfa"); fi
   # Fork + setsid before exec so QEMU detaches from caller's process group (survives SIGHUP)
-  daemonize "$PID" qemu.out qemu-system-aarch64 -machine virt,accel=hvf -cpu host -smp 4 -m 1024 \
+  daemonize "$PID" qemu.out qemu-system-aarch64 -machine virt,accel=hvf -cpu host -smp 2 -m 512 \
     -drive if=pflash,format=raw,readonly=on,file="$FW" \
     -drive if=pflash,format=raw,file="$VARS" \
     -drive file="$DISK",if=none,id=hd0,format=qcow2 -device virtio-blk-pci,drive=hd0 \
