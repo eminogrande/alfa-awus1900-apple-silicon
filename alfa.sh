@@ -203,15 +203,19 @@ sudo modprobe 8814au 2>/dev/null || true'
 }
 
 driver() {
-  ssh_q 'sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq build-essential dkms git iw rfkill nano wpasupplicant isc-dhcp-client iputils-ping linux-modules-extra-$(uname -r)'
-  if ssh_q 'dkms status 2>/dev/null | grep -q "rtl8814au.*installed"'; then
-    echo "driver already installed"
+  ssh_q 'sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq build-essential dkms git iw rfkill nano wpasupplicant isc-dhcp-client iputils-ping linux-headers-generic linux-headers-$(uname -r) linux-modules-extra-$(uname -r)'
+  if ssh_q 'dkms status 2>/dev/null | grep -q "rtl8814au.*$(uname -r).*installed"'; then
+    echo "driver already installed for $(uname -r)"
   else
-    # Ubuntu 6.8 backports the 3-arg cfg80211 set_monitor_channel; upstream guard is 6.12.101
-    ssh_q 'rm -rf ~/8814au && git clone -q --depth 1 https://github.com/morrownr/8814au.git ~/8814au && cd ~/8814au &&
-      sed -i "s/KERNEL_VERSION(6, 12, 101)/KERNEL_VERSION(6, 8, 0)/g" os_dep/linux/ioctl_cfg80211.c &&
-      sudo ./remove-driver.sh >/dev/null 2>&1; sudo dkms remove rtl8814au/5.8.5.1 --all >/dev/null 2>&1; sudo rm -rf /usr/src/rtl8814au-5.8.5.1
-      sudo ./install-driver.sh NoPrompt >~/drv.log 2>&1; tail -3 ~/drv.log'
+    # Try dkms autoinstall first if source is already registered; else fresh clone & build
+    ssh_q 'sudo dkms autoinstall -k $(uname -r) 2>/dev/null || true'
+    if ! ssh_q 'dkms status 2>/dev/null | grep -q "rtl8814au.*$(uname -r).*installed"'; then
+      # Ubuntu 6.8 backports the 3-arg cfg80211 set_monitor_channel; upstream guard is 6.12.101
+      ssh_q 'rm -rf ~/8814au && git clone -q --depth 1 https://github.com/morrownr/8814au.git ~/8814au && cd ~/8814au &&
+        sed -i "s/KERNEL_VERSION(6, 12, 101)/KERNEL_VERSION(6, 8, 0)/g" os_dep/linux/ioctl_cfg80211.c &&
+        sudo ./remove-driver.sh >/dev/null 2>&1; sudo dkms remove rtl8814au/5.8.5.1 --all >/dev/null 2>&1; sudo rm -rf /usr/src/rtl8814au-5.8.5.1
+        sudo ./install-driver.sh NoPrompt >~/drv.log 2>&1; tail -3 ~/drv.log'
+    fi
   fi
   tune
   ssh_q 'iw dev | grep -E "Interface|type|txpower"'
