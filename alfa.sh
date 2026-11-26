@@ -32,6 +32,7 @@ ssh_q() { ssh "${SSH_ARGS[@]}" "$SSH_TARGET" "$@"; }
 need_qemu() { command -v qemu-system-aarch64 >/dev/null || { echo "qemu missing: brew install qemu"; exit 1; }; }
 mon() { [ -S "$MON" ] && printf '%s\n' "$1" | nc -U -w 2 "$MON" >/dev/null 2>&1 || true; }
 host_has_dongle() { ioreg -p IOUSB -w0 2>/dev/null | grep -q '802\.11ac NIC'; }
+speedbond_active() { nc -z 127.0.0.1 19454 2>/dev/null; }
 vm_running() {
   [ -f "$PID" ] || return 1
   local p; p=$(cat "$PID" 2>/dev/null || true)
@@ -44,7 +45,16 @@ proxy_running() {
   fi
   nc -z 127.0.0.1 "$PROXY_PORT" 2>/dev/null && pgrep -f "ssh.*127\.0\.0\.1:$PROXY_PORT" >/dev/null 2>&1
 }
-sys_proxy_on() { networksetup -getsocksfirewallproxy Wi-Fi 2>/dev/null | grep -q '^Enabled: Yes'; }
+physical_services() {
+  networksetup -listnetworkserviceorder 2>/dev/null | awk '
+    /^\([0-9]+\) / { name=$0; sub(/^\([0-9]+\) /, "", name); next }
+    /\(Hardware Port:.*Device: en[0-9]+\)/ && name != "" { print name; name="" }
+  '
+}
+sys_proxy_on() {
+  scutil --proxy 2>/dev/null | grep -q 'SOCKSEnable : 1' && return 0
+  networksetup -getsocksfirewallproxy Wi-Fi 2>/dev/null | grep -q '^Enabled: Yes'
+}
 iface() { ssh_q 'iw dev 2>/dev/null | awk "/Interface/{print \$2; exit}"' 2>/dev/null || true; }
 
 with_lock() {
@@ -206,8 +216,24 @@ driver() {
   ssh_q 'iw dev | grep -E "Interface|type|txpower"'
 }
 
+clear_sys_proxy() {
+  local svc
+  while IFS= read -r svc; do
+    [ -n "$svc" ] && networksetup -setsocksfirewallproxystate "$svc" off 2>/dev/null || true
+  done < <(physical_services)
+}
+
+enable_sys_proxy() {
+  local svc
+  while IFS= read -r svc; do
+    [ -n "$svc" ] || continue
+    networksetup -setsocksfirewallproxy "$svc" 127.0.0.1 "$PROXY_PORT" 2>/dev/null || true
+    networksetup -setsocksfirewallproxystate "$svc" on 2>/dev/null || true
+  done < <(physical_services)
+}
+
 proxy_off() {
-  networksetup -setsocksfirewallproxystate Wi-Fi off 2>/dev/null || true
+  clear_sys_proxy
   if [ -f "$PROXY_PID" ]; then
     kill "$(cat "$PROXY_PID" 2>/dev/null)" 2>/dev/null || true
     rm -f "$PROXY_PID"
@@ -241,12 +267,16 @@ proxy_on() {
     echo "socks5 running on 127.0.0.1:$PROXY_PORT (aes128-gcm)"
   fi
   if [ "$set_sys" = 1 ]; then
-    networksetup -setsocksfirewallproxy Wi-Fi 127.0.0.1 "$PROXY_PORT" 2>/dev/null || true
-    networksetup -setsocksfirewallproxystate Wi-Fi on 2>/dev/null || true
-    echo on > "$STATE_FILE" 2>/dev/null || true
-    echo "macOS system SOCKS proxy -> ON (browsers/apps now route via Alfa)"
+    if speedbond_active; then
+      clear_sys_proxy
+      echo bonded > "$STATE_FILE" 2>/dev/null || true
+      echo "Open Speedify active — Alfa ready for bonding"
+    else
+      enable_sys_proxy
+      echo on > "$STATE_FILE" 2>/dev/null || true
+      echo "macOS system SOCKS proxy -> ON (Alfa is default across all network services)"
+    fi
   fi
-  echo "CLI: ALL_PROXY=socks5h://127.0.0.1:$PROXY_PORT curl -s https://ifconfig.me"
 }
 
 scan_cmd() {
@@ -271,7 +301,7 @@ wifi_cmd() {
   ifc=$(iface)
   [ -n "$ifc" ] || { echo "no wifi interface - run ./alfa.sh usb-on"; exit 1; }
   if [ "${1:-}" = "off" ]; then
-    ssh_q "sudo pkill wpa_supplicant 2>/dev/null || true; sudo dhclient -r $ifc 2>/dev/null || true; sudo ip addr flush dev $ifc; sudo resolvectl revert $ifc 2>/dev/null || true; echo disconnected"
+    ssh_q "sudo pkill -x wpa_supplicant 2>/dev/null || true; sudo pkill -x dhclient 2>/dev/null || true; sudo ip addr flush dev $ifc; sudo resolvectl revert $ifc 2>/dev/null || true; echo disconnected"
     return
   fi
   if [ -z "${1:-}" ]; then
@@ -289,13 +319,13 @@ wifi_cmd() {
   # Prefer 5 GHz (802.11ac) via higher priority; fall back to 2.4 GHz if SSID is 2.4-only
   printf 'ctrl_interface=/run/wpa_supplicant\nnetwork={\n\tssid="%s"\n\t%s\n\tfreq_list=%s\n\tpriority=2\n}\nnetwork={\n\tssid="%s"\n\t%s\n\tpriority=1\n}\n' \
     "$ssid_esc" "$auth" "$f5" "$ssid_esc" "$auth" | ssh_q "sudo mkdir -p /etc/wpa_supplicant && sudo install -m 600 /dev/stdin /etc/wpa_supplicant/alfa.conf &&
-    sudo pkill wpa_supplicant 2>/dev/null || true; sudo rm -f /run/wpa_supplicant/$ifc; sleep 1
+    sudo pkill -x wpa_supplicant 2>/dev/null || true; sudo pkill -x dhclient 2>/dev/null || true; sudo rm -f /run/wpa_supplicant/$ifc; sleep 1
     sudo ip link set $ifc up && sudo iw dev $ifc set power_save off 2>/dev/null || true
     sudo wpa_supplicant -B -i $ifc -c /etc/wpa_supplicant/alfa.conf >/dev/null
     for _ in \$(seq 20); do iw dev $ifc link | grep -q 'Connected to' && break; sleep 1; done
     iw dev $ifc link | grep -q 'Connected to' || { echo 'failed to associate (check SSID/pass)'; exit 1; }
-    sudo dhclient -r $ifc 2>/dev/null || true
     sudo dhclient -1 $ifc
+    ip -4 -br a show $ifc | grep -q '[0-9]\.' || { echo 'failed to get IPv4 via DHCP'; exit 1; }
     GW=\$(ip route show | awk -v d=$ifc '\$1==\"default\" && \$0 ~ \"dev \"d {print \$3; exit}')
     if [ -n \"\$GW\" ]; then
       sudo ip route del default dev $ifc 2>/dev/null || true
@@ -312,20 +342,27 @@ wifi_cmd() {
 
 start_all() {
   with_lock
-  echo auto > "$MODE_FILE"
+  echo on > "$MODE_FILE"
   up
   if host_has_dongle; then
     [ -n "$(iface)" ] || usb_attach || true
     local ifc; ifc=$(iface)
     if [ -n "$ifc" ]; then
-      local conn; conn=$(ssh_q "iw dev $ifc link 2>/dev/null | grep -c 'Connected to'" 2>/dev/null || echo 0)
-      if [ "$conn" != "1" ] && [ -f wifi.env ]; then
+      local conn ip4
+      conn=$(ssh_q "iw dev $ifc link 2>/dev/null | grep -c 'Connected to'" 2>/dev/null || echo 0)
+      ip4=$(ssh_q "ip -4 -br a show $ifc 2>/dev/null | awk '{print \$3}'" 2>/dev/null || true)
+      if { [ "$conn" != "1" ] || [ -z "$ip4" ]; } && [ -f wifi.env ]; then
         # shellcheck disable=SC1091
         . ./wifi.env
         [ -n "${SSID:-}" ] && wifi_cmd "$SSID" "${PASS:-}" || true
       fi
       conn=$(ssh_q "iw dev $ifc link 2>/dev/null | grep -c 'Connected to'" 2>/dev/null || echo 0)
-      [ "$conn" = "1" ] && proxy_on 1 || echo "VM up, Wi-Fi not connected yet"
+      ip4=$(ssh_q "ip -4 -br a show $ifc 2>/dev/null | awk '{print \$3}'" 2>/dev/null || true)
+      if [ "$conn" = "1" ] && [ -n "$ip4" ]; then
+        proxy_on 1
+      else
+        echo "VM up, pick a Wi-Fi network to connect"
+      fi
     fi
   else
     echo "VM up (plug in Alfa dongle to connect)"
@@ -333,14 +370,15 @@ start_all() {
 }
 
 status_cmd() {
-  local dongle=0 vm=0 prx=0 sysp=0 watch=0 mode=auto
+  local dongle=0 vm=0 prx=0 sysp=0 watch=0 bonded=0 mode=on
   local ifc="" ssid="" freq="" sig="" ip4=""
   host_has_dongle && dongle=1
   vm_running && vm=1
   proxy_running && prx=1
   sys_proxy_on && sysp=1
+  speedbond_active && bonded=1
   pgrep -f "alfa-autoswitch\.sh" >/dev/null 2>&1 && watch=1
-  [ -f "$MODE_FILE" ] && mode=$(cat "$MODE_FILE" 2>/dev/null || echo auto)
+  [ -f "$MODE_FILE" ] && mode=$(cat "$MODE_FILE" 2>/dev/null || echo on)
   if [ "$vm" = 1 ]; then
     local g
     g=$(ssh_q '
@@ -360,8 +398,8 @@ status_cmd() {
     sig=$(printf '%s\n' "$g" | awk -F= '$1=="signal"{print $2; exit}')
     ip4=$(printf '%s\n' "$g" | awk -F= '$1=="ip"{print $2; exit}')
   fi
-  printf 'dongle=%s\nvm=%s\niface=%s\nssid=%s\nfreq=%s\nsignal=%s\nip=%s\nproxy=%s\nsys_proxy=%s\nwatch=%s\nmode=%s\n' \
-    "$dongle" "$vm" "$ifc" "$ssid" "$freq" "$sig" "$ip4" "$prx" "$sysp" "$watch" "$mode"
+  printf 'dongle=%s\nvm=%s\niface=%s\nssid=%s\nfreq=%s\nsignal=%s\nip=%s\nproxy=%s\nsys_proxy=%s\nwatch=%s\nbonded=%s\nmode=%s\n' \
+    "$dongle" "$vm" "$ifc" "$ssid" "$freq" "$sig" "$ip4" "$prx" "$sysp" "$watch" "$bonded" "$mode"
 }
 
 bench() {
@@ -386,7 +424,7 @@ bench() {
 
   echo "=== LATENCY (10 pings -> 1.1.1.1) ==="
   printf "MacBook en0: "
-  ping -c 10 -i 0.2 -q 1.1.1.1 2>&1 | awk -F'= ' '/round-trip/{print $2} /packet loss/{l=$0} END{}' | tr '\n' ' '; echo
+  ping -c 10 -i 0.2 -q 1.1.1.1 2>&1 | awk -F'= ' '/round-trip/{print $2}' | tr '\n' ' '; echo
   local alfa_ip=""
   [ -n "$ifc" ] && alfa_ip=$(ssh_q "ip -4 -br a show $ifc | awk '{print \$3}'")
   if [ -n "$alfa_ip" ]; then

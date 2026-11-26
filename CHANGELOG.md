@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-11-26 — Ultra-simple ON/OFF `AlfaBar` + "Always Default" reliability + Open Speedify coordination
+- **Always-default Alfa daemon (`alfa-autoswitch.sh`, `alfa.sh`)**:
+  - Removed ping-loss fallback that randomly turned Alfa off under load/hiccups — when Alfa is ON and plugged in, it stays default across **all** active macOS physical network services (`Wi-Fi`, `iPhone USB`, USB Ethernet, etc.) no matter what.
+  - Direct auto-rejoin of saved `wifi.env` (removed fragile `iw scan` gate that failed on `-16 EBUSY`), plus automatic USB re-attach after 2 failed joins (self-heals after Mac sleep).
+  - Clean Open Speedify coordination (`127.0.0.1:19454`): yields macOS system SOCKS5 proxy while Open Speedify is actively combining Alfa with other links (keeping VM & Wi-Fi healthy, never modifying `/tmp/alfa-mode`), and immediately restores Alfa as default when Open Speedify turns OFF.
+- **Fix: stacked `dhclient` daemons in VM (`alfa.sh`)**: Kills stale `dhclient` processes cleanly with `pkill -x dhclient` / `pkill -x wpa_supplicant` before DHCP lease acquisition and verifies IPv4 presence on `start`/`wifi`.
+- **Ultra-simplified emoji `AlfaBar` (`AlfaBar/main.swift`)**: Compact `⚪ 📡` / `🟡 📡` / `🟢 📡` menu bar with a single `🟢 Turn Alfa ON` / `🔴 Turn Alfa OFF` toggle (`⌘S`), `📶 Wi-Fi Network… ▸` picker, and collapsed `🔧 Tools ▸` submenu. Shows `🟢 Alfa ON · Default Internet` or `🟢 Alfa ON · Combined in Open Speedify`.
+
 ## 2026-11-22 (5) — Rename `watch.sh` → `alfa-autoswitch.sh` + `AlfaBar` TUI shortcut
 - Renamed `watch.sh` → `alfa-autoswitch.sh` and LaunchAgent `com.alfa.watch` → `com.alfa.autoswitch` (log `/tmp/alfa-autoswitch.log`) for clarity.
 - Added **Open TUI (`alfa`)** item to `AlfaBar` and removed remaining auto-scan trigger on status poll so menu bar status + terminal TUI work side by side with zero radio disruption.

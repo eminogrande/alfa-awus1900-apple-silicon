@@ -1,4 +1,4 @@
-// AlfaBar — reliable menu bar controller for Alfa AWUS1900 VM (AppKit).
+// AlfaBar — ultra-simple emoji menu bar ON/OFF controller for Alfa AWUS1900 (AppKit).
 import AppKit
 import Foundation
 
@@ -25,9 +25,13 @@ struct Status {
   var proxy = false
   var sysProxy = false
   var watch = false
-  var mode = "auto"
+  var bonded = false
+  var mode = "on"
 
-  var routingViaAlfa: Bool { sysProxy && proxy && !ssid.isEmpty }
+  var isEnabled: Bool { mode != "off" }
+  var hasWifi: Bool { vm && !ssid.isEmpty && !ip.isEmpty }
+  var routingViaAlfa: Bool { hasWifi && sysProxy && proxy }
+  var feedingBond: Bool { hasWifi && bonded && isEnabled }
   var band: String {
     if freq.hasPrefix("5") { return "5 GHz" }
     if freq.hasPrefix("2") { return "2.4 GHz" }
@@ -40,6 +44,12 @@ struct Network {
   let signal: String
   let freq: String
   var band: String { freq.hasPrefix("5") ? "5G" : (freq.hasPrefix("2") ? "2.4G" : "") }
+  var dot: String {
+    let v = Int(signal) ?? -90
+    if v >= -65 { return "🟢" }
+    if v >= -76 { return "🟡" }
+    return "🟠"
+  }
 }
 
 @discardableResult
@@ -86,7 +96,8 @@ func parseStatus(_ raw: String) -> Status {
     case "proxy": s.proxy = (v == "1")
     case "sys_proxy": s.sysProxy = (v == "1")
     case "watch": s.watch = (v == "1")
-    case "mode": s.mode = v.isEmpty ? "auto" : v
+    case "bonded": s.bonded = (v == "1")
+    case "mode": s.mode = v.isEmpty ? "on" : v
     default: break
     }
   }
@@ -99,79 +110,85 @@ func savedPassword(for ssid: String) -> String? {
   return code == 0 ? out : nil
 }
 
+func ensureAutoswitchRunning() {
+  if runExec("/usr/bin/pgrep", ["-f", "alfa-autoswitch\\.sh"]).0 == 0 { return }
+  guard FileManager.default.fileExists(atPath: WATCH_PLIST) else { return }
+  let uid = String(getuid())
+  let (code, _) = runExec("/bin/launchctl", ["bootstrap", "gui/\(uid)", WATCH_PLIST])
+  if code != 0 {
+    _ = runExec("/bin/launchctl", ["load", "-w", WATCH_PLIST])
+  }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   var item: NSStatusItem!
   var menu: NSMenu!
   var stateLine: NSMenuItem!
   var detailLine: NSMenuItem!
-  var ipLine: NSMenuItem!
+  var toggleItem: NSMenuItem!
   var joinItem: NSMenuItem!
-  var startItem: NSMenuItem!
-  var stopItem: NSMenuItem!
-  var disconnectItem: NSMenuItem!
-  var useAlfaItem: NSMenuItem!
-  var useMacItem: NSMenuItem!
-  var watchItem: NSMenuItem!
 
   let pollQ = DispatchQueue(label: "com.alfabar.poll")
   let opQ = DispatchQueue(label: "com.alfabar.op")
   let scanQ = DispatchQueue(label: "com.alfabar.scan")
-  let ipQ = DispatchQueue(label: "com.alfabar.ip")
 
   var status = Status()
   var networks: [Network] = []
-  var exitIP = "…"
   var busyText: String? = nil
   var isPolling = false
   var isScanning = false
-  var isFetchingIP = false
-  var lastIPFetch = Date.distantPast
-  var lastRouteState: Bool? = nil
 
   func applicationDidFinishLaunching(_ n: Notification) {
     item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     menu = NSMenu()
     menu.autoenablesItems = false
 
-    stateLine = makeInfoItem("Checking…")
-    detailLine = makeInfoItem("")
-    ipLine = makeInfoItem("Exit IP: …")
+    stateLine = makeInfoItem("⏳ Checking…", bold: true)
+    detailLine = makeInfoItem("", bold: false)
     menu.addItem(.separator())
 
-    startItem = addAction("Start Alfa", #selector(startAlfa), "s")
-    stopItem = addAction("Stop Alfa (VM off)", #selector(stopAlfa), "x")
-    menu.addItem(.separator())
+    toggleItem = addAction("🟢 Turn Alfa ON", #selector(toggleAlfa), "s")
 
-    joinItem = menu.addItem(withTitle: "Connect to Wi-Fi…", action: nil, keyEquivalent: "")
+    joinItem = menu.addItem(withTitle: "📶 Wi-Fi Network…", action: nil, keyEquivalent: "")
     let sub = NSMenu()
     sub.delegate = self
     sub.autoenablesItems = false
     joinItem.submenu = sub
-    disconnectItem = addAction("Disconnect Wi-Fi", #selector(disconnectWifi), "")
+
     menu.addItem(.separator())
 
-    useAlfaItem = addAction("Use Alfa (Proxy ON)", #selector(forceOn), "a")
-    useMacItem = addAction("Use MacBook Wi-Fi (Proxy OFF)", #selector(forceOff), "m")
-    watchItem = addAction("Auto-switch", #selector(toggleWatch), "w")
-    menu.addItem(.separator())
+    let toolsRoot = menu.addItem(withTitle: "🔧 Tools", action: nil, keyEquivalent: "")
+    let tools = NSMenu()
+    let usb = tools.addItem(withTitle: "🔌 Re-attach USB", action: #selector(reattachUSB), keyEquivalent: "")
+    usb.target = self
+    let tui = tools.addItem(withTitle: "💻 Terminal (alfa)", action: #selector(openTUI), keyEquivalent: "")
+    tui.target = self
+    let log = tools.addItem(withTitle: "📄 View Log", action: #selector(viewLog), keyEquivalent: "")
+    log.target = self
+    toolsRoot.submenu = tools
 
-    _ = addAction("Open TUI (alfa)", #selector(openTUI), "o")
-    _ = addAction("Re-attach USB", #selector(reattachUSB), "u")
-    _ = addAction("Open VM Shell", #selector(openShell), "t")
-    _ = addAction("View Auto-switch Log", #selector(viewLog), "l")
-    menu.addItem(.separator())
-    menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    let quit = menu.addItem(withTitle: "🚪 Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    quit.target = NSApp
 
     item.menu = menu
     renderUI()
     pollStatus()
-    Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.pollStatus() }
+    Timer.scheduledTimer(withTimeInterval: 2.5, repeats: true) { [weak self] _ in self?.pollStatus() }
   }
 
-  func makeInfoItem(_ title: String) -> NSMenuItem {
+  func makeInfoItem(_ title: String, bold: Bool) -> NSMenuItem {
     let it = menu.addItem(withTitle: title, action: nil, keyEquivalent: "")
     it.isEnabled = false
+    setStyled(it, title, bold: bold, dim: !bold)
     return it
+  }
+
+  func setStyled(_ it: NSMenuItem, _ text: String, bold: Bool, dim: Bool) {
+    var attrs: [NSAttributedString.Key: Any] = [
+      .font: bold ? NSFont.boldSystemFont(ofSize: 13) : NSFont.systemFont(ofSize: 12)
+    ]
+    if dim { attrs[.foregroundColor] = NSColor.secondaryLabelColor }
+    it.attributedTitle = NSAttributedString(string: text, attributes: attrs)
   }
 
   func addAction(_ title: String, _ sel: Selector, _ key: String) -> NSMenuItem {
@@ -182,45 +199,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   func renderUI() {
     let s = status
+    let isOn = s.isEnabled || s.vm
+
     if let busy = busyText {
-      item.button?.title = "⏳"
-      stateLine.title = "⏳ \(busy)"
+      item.button?.title = "⏳ 📡"
+      setStyled(stateLine, "⏳ \(busy)", bold: true, dim: false)
     } else if s.routingViaAlfa {
-      item.button?.title = "📡"
-      stateLine.title = "🟢 Routing via Alfa"
-    } else if s.vm && !s.ssid.isEmpty {
-      item.button?.title = "🟡"
-      stateLine.title = "🟡 Alfa connected (MacBook Wi-Fi active)"
-    } else if s.vm {
-      item.button?.title = "🟡"
-      stateLine.title = "🟡 VM running · MacBook Wi-Fi active"
+      item.button?.title = "🟢 📡"
+      setStyled(stateLine, "🟢 Alfa ON · Default Internet", bold: true, dim: false)
+    } else if s.feedingBond {
+      item.button?.title = "🟢 📡"
+      setStyled(stateLine, "🟢 Alfa ON · Combined in Open Speedify", bold: true, dim: false)
+    } else if isOn && !s.dongle {
+      item.button?.title = "🟡 📡"
+      setStyled(stateLine, "🟡 Alfa ON · Plug in USB dongle", bold: true, dim: false)
+    } else if isOn {
+      item.button?.title = "🟡 📡"
+      setStyled(stateLine, "🟡 Alfa ON · Connecting…", bold: true, dim: false)
     } else {
-      item.button?.title = "◎"
-      stateLine.title = "⚪︎ MacBook Wi-Fi"
+      item.button?.title = "⚪ 📡"
+      setStyled(stateLine, "⚪ Alfa OFF", bold: true, dim: false)
     }
 
-    var parts: [String] = []
-    parts.append("Dongle: \(s.dongle ? "plugged" : "unplugged")")
-    parts.append("VM: \(s.vm ? "on" : "off")")
-    if !s.ssid.isEmpty {
-      let rf = [s.signal.isEmpty ? nil : "\(s.signal) dBm", s.band.isEmpty ? nil : s.band].compactMap { $0 }.joined(separator: ", ")
-      parts.append(rf.isEmpty ? s.ssid : "\(s.ssid) (\(rf))")
-    } else if s.vm && !s.iface.isEmpty {
-      parts.append("Wi-Fi: disconnected")
+    var detail = ""
+    if s.vm && !s.ssid.isEmpty {
+      let rf = [s.signal.isEmpty ? nil : "\(s.signal) dBm", s.band.isEmpty ? nil : s.band].compactMap { $0 }.joined(separator: " · ")
+      detail = rf.isEmpty ? "   📶 \(s.ssid)" : "   📶 \(s.ssid) · \(rf)"
+    } else {
+      detail = s.dongle ? "   🔌 USB dongle plugged in" : "   🔌 USB dongle unplugged"
     }
-    detailLine.title = parts.joined(separator: " · ")
-    ipLine.title = "Exit IP: \(exitIP)"
+    setStyled(detailLine, detail, bold: false, dim: true)
 
     let busy = (busyText != nil)
-    startItem.isEnabled = !busy
-    stopItem.isEnabled = !busy && (s.vm || s.sysProxy || s.proxy)
-    disconnectItem.isEnabled = !busy && s.vm && !s.ssid.isEmpty
-    useAlfaItem.isEnabled = !busy && s.vm && !s.ssid.isEmpty
-    useAlfaItem.state = s.routingViaAlfa ? .on : .off
-    useMacItem.isEnabled = !busy
-    useMacItem.state = !s.routingViaAlfa ? .on : .off
-    watchItem.state = (s.watch && s.mode != "off") ? .on : .off
-    watchItem.title = s.watch ? (s.mode == "off" ? "Auto-switch (Paused)" : "Auto-switch (On)") : "Auto-switch (Off)"
+    toggleItem.isEnabled = !busy
+    toggleItem.title = isOn ? "🔴 Turn Alfa OFF" : "🟢 Turn Alfa ON"
+    joinItem.isEnabled = !busy && s.vm && s.dongle && !s.iface.isEmpty
   }
 
   func pollStatus() {
@@ -231,30 +244,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       let (_, out) = runAlfa(["status"])
       let parsed = parseStatus(out)
       DispatchQueue.main.async {
-        let routeChanged = (self.lastRouteState != parsed.routingViaAlfa)
-        self.lastRouteState = parsed.routingViaAlfa
         self.status = parsed
-        self.renderUI()
-        if routeChanged || Date().timeIntervalSince(self.lastIPFetch) > 15 {
-          self.fetchExitIP(viaAlfa: parsed.routingViaAlfa)
-        }
-      }
-    }
-  }
-
-  func fetchExitIP(viaAlfa: Bool) {
-    ipQ.async { [weak self] in
-      guard let self = self, !self.isFetchingIP else { return }
-      self.isFetchingIP = true
-      defer { self.isFetchingIP = false }
-      let args = viaAlfa
-        ? ["-s", "--max-time", "3", "--socks5-hostname", "127.0.0.1:1080", "https://ifconfig.me"]
-        : ["-s", "--max-time", "3", "--noproxy", "*", "https://ifconfig.me"]
-      let (code, out) = runExec("/usr/bin/curl", args)
-      let ip = (code == 0 && !out.isEmpty && out.count < 64) ? out : "offline"
-      DispatchQueue.main.async {
-        self.lastIPFetch = Date()
-        self.exitIP = ip
         self.renderUI()
       }
     }
@@ -295,9 +285,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         self.busyText = nil
         self.status = parsed
         self.renderUI()
-        self.fetchExitIP(viaAlfa: parsed.routingViaAlfa)
         if let err = errMsg {
-          self.showAlert(title: "AlfaBar", message: err)
+          self.showAlert(title: "📡 Alfa", message: err)
         }
       }
     }
@@ -314,8 +303,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   func promptPassword(ssid: String) -> String? {
     NSApp.activate(ignoringOtherApps: true)
     let a = NSAlert()
-    a.messageText = "Connect to \"\(ssid)\""
-    a.informativeText = "Enter Wi-Fi password (leave blank for open network):"
+    a.messageText = "📶 Connect to \"\(ssid)\""
+    a.informativeText = "Enter Wi-Fi password (blank if open):"
     a.addButton(withTitle: "Connect")
     a.addButton(withTitle: "Cancel")
     let f = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
@@ -326,24 +315,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   func menuNeedsUpdate(_ m: NSMenu) {
     m.removeAllItems()
-    if !status.vm {
-      let it = m.addItem(withTitle: "Start Alfa VM first", action: nil, keyEquivalent: "")
-      it.isEnabled = false
-      return
-    }
-    if !status.dongle || status.iface.isEmpty {
-      let it = m.addItem(withTitle: status.dongle ? "Attaching USB… click Re-attach USB" : "Plug in Alfa USB dongle", action: nil, keyEquivalent: "")
+    if !status.vm || !status.dongle || status.iface.isEmpty {
+      let it = m.addItem(withTitle: "Turn Alfa ON with dongle plugged in", action: nil, keyEquivalent: "")
       it.isEnabled = false
       return
     }
     if networks.isEmpty {
-      let it = m.addItem(withTitle: isScanning ? "Scanning…" : "No networks cached yet", action: nil, keyEquivalent: "")
+      let it = m.addItem(withTitle: isScanning ? "⏳ Scanning…" : "🔄 Click Rescan…", action: nil, keyEquivalent: "")
       it.isEnabled = false
       scanWifi(force: true)
     } else {
       for net in networks {
         let meta = [net.signal.isEmpty ? nil : "\(net.signal) dBm", net.band.isEmpty ? nil : net.band].compactMap { $0 }.joined(separator: " · ")
-        let title = meta.isEmpty ? net.ssid : "\(net.ssid)  (\(meta))"
+        let title = meta.isEmpty ? "\(net.dot) \(net.ssid)" : "\(net.dot) \(net.ssid)  (\(meta))"
         let it = m.addItem(withTitle: title, action: #selector(joinFromMenu(_:)), keyEquivalent: "")
         it.target = self
         it.representedObject = net.ssid
@@ -351,23 +335,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       }
     }
     m.addItem(.separator())
-    let other = m.addItem(withTitle: "Other network…", action: #selector(joinOther), keyEquivalent: "")
+    let other = m.addItem(withTitle: "➕ Other network…", action: #selector(joinOther), keyEquivalent: "")
     other.target = self
-    let rescan = m.addItem(withTitle: "Rescan now", action: #selector(rescanNow), keyEquivalent: "")
+    let rescan = m.addItem(withTitle: "🔄 Rescan", action: #selector(rescanNow), keyEquivalent: "")
     rescan.target = self
   }
 
-  @objc func startAlfa() {
-    runOperation("Starting Alfa…") {
-      let (code, out) = runAlfa(["start"])
-      return code == 0 ? nil : (out.isEmpty ? "Failed to start Alfa VM" : out)
-    }
-  }
-
-  @objc func stopAlfa() {
-    runOperation("Stopping VM…") {
-      _ = runAlfa(["stop"])
-      return nil
+  @objc func toggleAlfa() {
+    let turningOff = status.isEnabled || status.vm
+    if turningOff {
+      runOperation("Turning Alfa OFF…") {
+        _ = runAlfa(["stop"])
+        return nil
+      }
+    } else {
+      runOperation("Starting Alfa…") {
+        ensureAutoswitchRunning()
+        let (code, out) = runAlfa(["start"])
+        return code == 0 ? nil : (out.isEmpty ? "Failed to start Alfa" : out)
+      }
     }
   }
 
@@ -383,7 +369,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   @objc func joinOther() {
     NSApp.activate(ignoringOtherApps: true)
     let a = NSAlert()
-    a.messageText = "Join Wi-Fi Network"
+    a.messageText = "📶 Join Wi-Fi Network"
     a.addButton(withTitle: "Connect")
     a.addButton(withTitle: "Cancel")
     let box = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 58))
@@ -403,7 +389,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   func connect(ssid: String, pass: String, askOnFail: Bool) {
     runOperation("Joining \(ssid)…") { [weak self] in
-      try? "auto".write(toFile: MODE_FILE, atomically: true, encoding: .utf8)
+      try? "on\n".write(toFile: MODE_FILE, atomically: true, encoding: .utf8)
+      ensureAutoswitchRunning()
       let (code, out) = runAlfa(["wifi", ssid, pass])
       if code == 0 {
         _ = runAlfa(["proxy", "on"])
@@ -421,76 +408,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
   }
 
-  @objc func disconnectWifi() {
-    runOperation("Disconnecting Wi-Fi…") {
-      try? "off".write(toFile: MODE_FILE, atomically: true, encoding: .utf8)
-      _ = runAlfa(["proxy", "off"])
-      _ = runAlfa(["wifi", "off"])
-      return nil
-    }
-  }
-
-  @objc func forceOn() {
-    runOperation("Enabling Alfa proxy…") {
-      try? "auto".write(toFile: MODE_FILE, atomically: true, encoding: .utf8)
-      let (code, out) = runAlfa(["proxy", "on"])
-      return code == 0 ? nil : (out.isEmpty ? "Failed to enable proxy" : out)
-    }
-  }
-
-  @objc func forceOff() {
-    runOperation("Switching to MacBook Wi-Fi…") {
-      try? "off".write(toFile: MODE_FILE, atomically: true, encoding: .utf8)
-      _ = runAlfa(["proxy", "off"])
-      return nil
-    }
-  }
-
-  @objc func toggleWatch() {
-    let currentlyActive = status.watch && status.mode != "off"
-    runOperation(currentlyActive ? "Disabling auto-switch…" : "Enabling auto-switch…") {
-      let uid = String(getuid())
-      if currentlyActive {
-        try? "off".write(toFile: MODE_FILE, atomically: true, encoding: .utf8)
-        _ = runExec("/bin/launchctl", ["bootout", "gui/\(uid)/com.alfa.autoswitch"])
-        _ = runExec("/usr/bin/pkill", ["-f", "alfa-autoswitch.sh"])
-      } else {
-        try? "auto".write(toFile: MODE_FILE, atomically: true, encoding: .utf8)
-        _ = runExec("/bin/launchctl", ["bootout", "gui/\(uid)/com.alfa.autoswitch"])
-        let (code, _) = runExec("/bin/launchctl", ["bootstrap", "gui/\(uid)", WATCH_PLIST])
-        if code != 0 {
-          _ = runExec("/bin/launchctl", ["load", "-w", WATCH_PLIST])
-        }
-      }
-      return nil
-    }
-  }
-
   @objc func reattachUSB() {
-    runOperation("Attaching USB…") {
+    runOperation("Re-attaching USB…") {
       let (code, out) = runAlfa(["usb-on"])
       return code == 0 ? nil : (out.isEmpty ? "Failed to attach USB dongle" : out)
     }
   }
 
-  @objc func rescanNow() {
-    scanWifi(force: true)
-  }
+  @objc func rescanNow() { scanWifi(force: true) }
 
   @objc func openTUI() {
     opQ.async {
       _ = runExec("/usr/bin/osascript", [
         "-e", "tell application \"Terminal\" to activate",
         "-e", "tell application \"Terminal\" to do script \"alfa\""
-      ])
-    }
-  }
-
-  @objc func openShell() {
-    opQ.async {
-      _ = runExec("/usr/bin/osascript", [
-        "-e", "tell application \"Terminal\" to activate",
-        "-e", "tell application \"Terminal\" to do script \"cd '\(VM)' && ./alfa.sh ssh\""
       ])
     }
   }

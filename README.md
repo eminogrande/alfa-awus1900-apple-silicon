@@ -73,9 +73,9 @@ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.alfa.autoswitch.pl
 ```
 
 How `alfa-autoswitch.sh` behaves:
-- **Plug in dongle:** auto-boots VM, attaches USB 3.0, checks if your saved `wifi.env` SSID is in range, joins it, and turns macOS SOCKS proxy ON.
-- **Active load safety (hysteresis):** only falls back after **3 consecutive 100% packet-loss checks** (or 2 consecutive Wi-Fi disconnects) so normal download bufferbloat never kills active transfers.
-- **Unplug or manual stop:** immediately disables macOS system SOCKS proxy (even after crashes/reboots), detaches the QEMU USB slot to prevent `libusb` log spam, and respects `/tmp/alfa-mode` (`off`) so it never fights manual `alfa stop` / `Use MacBook Wi-Fi`.
+- **Always default when ON:** when the dongle is plugged in and Alfa is ON (`/tmp/alfa-mode != off`), auto-boots VM, attaches USB 3.0, rejoins saved `wifi.env` (auto-resetting USB after failed joins), and enables macOS SOCKS5 proxy across all active physical network services (`Wi-Fi`, `iPhone USB`, USB Ethernet) — never dropping Alfa for ping spikes or load.
+- **Open Speedify handoff:** detects active Open Speedify (`127.0.0.1:19454`), yields system SOCKS5 cleanly while Open Speedify bonds Alfa with other links, and immediately restores Alfa as default when Open Speedify stops.
+- **Unplug or manual OFF:** immediately clears macOS system SOCKS5 across all services so MacBook Wi-Fi keeps working seamlessly, detaches QEMU USB on unplug, and stops cleanly when turned OFF.
 - **Op lock (`/tmp/alfa-op.pid`):** skips loop ticks while an interactive `alfa` command is running.
 
 ---
@@ -113,9 +113,9 @@ If you're passing a USB Wi-Fi adapter (especially Realtek `8814au` / `8812au`) i
    - Ubuntu 24.04's 6.8 kernel backports the 3-arg `cfg80211` `set_monitor_channel`; `alfa driver` patches the kernel-version guard from `6.12.101` to `6.8.0`.
    - Leave `rtw_country_code` unset — Realtek's internal table disables 5.8 GHz UNII-3 channels (149–165) in several regions.
 
-## Optional: AlfaBar menu bar app
+## AlfaBar menu bar app
 
-An optional Swift/AppKit menu bar app is also included in `AlfaBar/` (`./build-alfabar.sh`, requires Xcode CLT), though the `alfa` terminal TUI is recommended for reliability and zero background overhead.
+Native Swift/AppKit emoji menu bar controller (`⚪ 📡` / `🟡 📡` / `🟢 📡`) with a single **🟢 Turn Alfa ON / 🔴 Turn Alfa OFF** toggle and Wi-Fi picker (`./build-alfabar.sh`, installs `com.alfabar` LaunchAgent).
 
 ## Troubleshooting
 
